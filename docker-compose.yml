@@ -1,0 +1,70 @@
+services:
+  nusantaraops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nusantaraops:latest
+    container_name: nusantaraops-app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      DATA_DIR: /app/data
+      UPLOAD_DIR: /app/uploads
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - nusantaraops_data:/app/data
+      - nusantaraops_uploads:/app/uploads
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Opsional: jalankan dengan `docker compose --profile monitoring up -d`
+  # untuk memantau log real-time & uptime container lewat browser
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: nusantaraops-logs
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    ports:
+      - "${DOZZLE_PORT:-8080}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: nusantaraops-uptime
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    ports:
+      - "${KUMA_PORT:-3001}:3001"
+    volumes:
+      - uptime_kuma_data:/app/data
+
+volumes:
+  nusantaraops_data:
+  nusantaraops_uploads:
+  uptime_kuma_data:

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)" />
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="#334155" stroke-width="4" />
+  <!-- Server / Infrastructure Stack -->
+  <rect x="136" y="132" width="240" height="68" rx="16" fill="url(#accent)" />
+  <circle cx="176" cy="166" r="10" fill="#e0f2fe" />
+  <rect x="204" y="158" width="136" height="16" rx="8" fill="#bfdbfe" opacity="0.85" />
+
+  <rect x="136" y="222" width="240" height="68" rx="16" fill="#1d4ed8" />
+  <circle cx="176" cy="256" r="10" fill="#34d399" />
+  <rect x="204" y="248" width="136" height="16" rx="8" fill="#93c5fd" opacity="0.8" />
+
+  <rect x="136" y="312" width="240" height="68" rx="16" fill="#1e3a8a" />
+  <circle cx="176" cy="346" r="10" fill="#38bdf8" />
+  <rect x="204" y="338" width="136" height="16" rx="8" fill="#60a5fa" opacity="0.75" />
+</svg>

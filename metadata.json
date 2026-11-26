@@ -1,0 +1,8 @@
+{
+  "name": "NusantaraOps Enterprise",
+  "description": "National Infrastructure, Device Monitoring, Ticketing & Field Visit Management Platform",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

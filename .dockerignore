@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dev-dist/
+build/
+coverage/
+data/
+uploads/
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
