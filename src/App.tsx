@@ -9,11 +9,20 @@ import { TicketingView } from './components/TicketingView';
 import { FieldVisitsView } from './components/FieldVisitsView';
 import { AccountView } from './components/AccountView';
 import { MasterPromptView } from './components/MasterPromptView';
+import { RegionManagerModal } from './components/RegionManagerModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { AuthGate } from './components/AuthGate';
 import { apiFetch, getAuthToken, getSessionExpiresAt, setAuthToken, setUnauthorizedHandler } from './lib/api';
 import { canCreateOrManageTickets, canManageDevices } from './lib/permissions';
-import { InfrastructureDevice, Ticket, FieldVisitReport, UserProfile, AppNotification } from './types';
+import {
+  InfrastructureDevice,
+  Ticket,
+  TicketDraftPrefill,
+  FieldVisitReport,
+  UserProfile,
+  AppNotification,
+  RegionItem,
+} from './types';
 
 function playNotificationChime() {
   try {
@@ -39,6 +48,20 @@ function playNotificationChime() {
   }
 }
 
+function mapDeviceTypeToTicketCategory(type: InfrastructureDevice['type']): Ticket['category'] {
+  if (type === 'Core Router' || type === 'Switch') return 'Network & Routing';
+  if (type === 'UPS Power') return 'UPS Power';
+  if (type === 'AC Cooling Unit') return 'AC & Cooling';
+  return 'Server Hardware';
+}
+
+function mapVisitCategoryToTicketCategory(category: FieldVisitReport['category']): Ticket['category'] {
+  if (category === 'AC Cleaning & Service') return 'AC & Cooling';
+  if (category === 'UPS Battery Load Test') return 'UPS Power';
+  if (category === 'Network Cable Management') return 'Network & Routing';
+  return 'Server Hardware';
+}
+
 export default function App() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -58,18 +81,22 @@ export default function App() {
 
   // Real SQLite Data State
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [regions, setRegions] = useState<RegionItem[]>([]);
   const [devices, setDevices] = useState<InfrastructureDevice[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [visits, setVisits] = useState<FieldVisitReport[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [liveToast, setLiveToast] = useState<AppNotification | null>(null);
   const [focusedTicketId, setFocusedTicketId] = useState<string | null>(null);
+  const [focusedVisitId, setFocusedVisitId] = useState<string | null>(null);
+  const [ticketDraftPrefill, setTicketDraftPrefill] = useState<TicketDraftPrefill | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
   // Quick-open modals
   const [isCreateDeviceModalOpen, setIsCreateDeviceModalOpen] = useState(false);
   const [isCreateTicketModalOpen, setIsCreateTicketModalOpen] = useState(false);
   const [isCreateVisitModalOpen, setIsCreateVisitModalOpen] = useState(false);
+  const [isRegionModalOpen, setIsRegionModalOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('nusantara_theme', darkMode ? 'dark' : 'light');
@@ -81,14 +108,16 @@ export default function App() {
   }, [darkMode]);
 
   const loadWorkspaceData = useCallback(async () => {
-    const [uRes, dRes, tRes, vRes, nRes] = await Promise.all([
+    const [uRes, rRes, dRes, tRes, vRes, nRes] = await Promise.all([
       apiFetch<{ users: UserProfile[] }>('/api/users'),
+      apiFetch<{ regions: RegionItem[] }>('/api/regions'),
       apiFetch<{ devices: InfrastructureDevice[] }>('/api/devices'),
       apiFetch<{ tickets: Ticket[] }>('/api/tickets'),
       apiFetch<{ visits: FieldVisitReport[] }>('/api/visits'),
       apiFetch<{ notifications: AppNotification[] }>('/api/notifications'),
     ]);
     setUsers(uRes.users);
+    setRegions(rRes.regions);
     setDevices(dRes.devices);
     setTickets(tRes.tickets);
     setVisits(vRes.visits);
@@ -101,12 +130,16 @@ export default function App() {
       setCurrentUser(null);
       setSessionExpiresAt(null);
       setUsers([]);
+      setRegions([]);
       setDevices([]);
       setTickets([]);
       setVisits([]);
       setNotifications([]);
       setLiveToast(null);
       setFocusedTicketId(null);
+      setFocusedVisitId(null);
+      setTicketDraftPrefill(null);
+      setIsRegionModalOpen(false);
       setMobileMenuOpen(false);
       setAuthNotice(message);
     },
@@ -152,7 +185,7 @@ export default function App() {
     };
   }, [currentUser, sessionExpiresAt, handleSessionExpired]);
 
-  // Real-time WebSocket subscription for instant task & ticket notifications
+  // Real-time WebSocket subscription for instant notifications, tickets, regions, devices, and visits
   useEffect(() => {
     if (!currentUser) return;
 
@@ -172,13 +205,19 @@ export default function App() {
 
     const resyncAfterReconnect = async () => {
       try {
-        const [nRes, tRes] = await Promise.all([
+        const [nRes, tRes, rRes, dRes, vRes] = await Promise.all([
           apiFetch<{ notifications: AppNotification[] }>('/api/notifications'),
           apiFetch<{ tickets: Ticket[] }>('/api/tickets'),
+          apiFetch<{ regions: RegionItem[] }>('/api/regions'),
+          apiFetch<{ devices: InfrastructureDevice[] }>('/api/devices'),
+          apiFetch<{ visits: FieldVisitReport[] }>('/api/visits'),
         ]);
         if (!disposed) {
           setNotifications(nRes.notifications);
           setTickets(tRes.tickets);
+          setRegions(rRes.regions);
+          setDevices(dRes.devices);
+          setVisits(vRes.visits);
         }
       } catch {
         // Ignore transient resync failure
@@ -239,6 +278,54 @@ export default function App() {
           } else if (parsed.event === 'ticket:deleted' && typeof parsed.data?.id === 'string') {
             const deletedId = parsed.data.id;
             setTickets((prev) => prev.filter((t) => t.id !== deletedId));
+          } else if (parsed.event === 'region:created' && parsed.data?.region) {
+            const incoming = parsed.data.region as RegionItem;
+            setRegions((prev) =>
+              prev.some((r) => r.id === incoming.id)
+                ? prev
+                : [...prev, incoming].sort((a, b) => a.name.localeCompare(b.name))
+            );
+          } else if (parsed.event === 'region:updated' && parsed.data?.region) {
+            const incoming = parsed.data.region as RegionItem;
+            const prevName = typeof parsed.data.previousName === 'string' ? parsed.data.previousName : '';
+            setRegions((prev) =>
+              prev
+                .map((r) => (r.id === incoming.id ? incoming : r))
+                .sort((a, b) => a.name.localeCompare(b.name))
+            );
+            if (prevName && prevName !== incoming.name) {
+              setDevices((prev) => prev.map((d) => (d.region === prevName ? { ...d, region: incoming.name } : d)));
+              setVisits((prev) => prev.map((v) => (v.region === prevName ? { ...v, region: incoming.name } : v)));
+            }
+          } else if (parsed.event === 'region:deleted' && typeof parsed.data?.id === 'string') {
+            const deletedId = parsed.data.id;
+            setRegions((prev) => prev.filter((r) => r.id !== deletedId));
+          } else if (parsed.event === 'device:created' && parsed.data?.device) {
+            const incoming = parsed.data.device as InfrastructureDevice;
+            setDevices((prev) => (prev.some((d) => d.id === incoming.id) ? prev : [incoming, ...prev]));
+          } else if (parsed.event === 'device:updated' && parsed.data?.device) {
+            const incoming = parsed.data.device as InfrastructureDevice;
+            setDevices((prev) =>
+              prev.some((d) => d.id === incoming.id)
+                ? prev.map((d) => (d.id === incoming.id ? incoming : d))
+                : [incoming, ...prev]
+            );
+          } else if (parsed.event === 'device:deleted' && typeof parsed.data?.id === 'string') {
+            const deletedId = parsed.data.id;
+            setDevices((prev) => prev.filter((d) => d.id !== deletedId));
+          } else if (parsed.event === 'visit:created' && parsed.data?.visit) {
+            const incoming = parsed.data.visit as FieldVisitReport;
+            setVisits((prev) => (prev.some((v) => v.id === incoming.id) ? prev : [incoming, ...prev]));
+          } else if (parsed.event === 'visit:updated' && parsed.data?.visit) {
+            const incoming = parsed.data.visit as FieldVisitReport;
+            setVisits((prev) =>
+              prev.some((v) => v.id === incoming.id)
+                ? prev.map((v) => (v.id === incoming.id ? incoming : v))
+                : [incoming, ...prev]
+            );
+          } else if (parsed.event === 'visit:deleted' && typeof parsed.data?.id === 'string') {
+            const deletedId = parsed.data.id;
+            setVisits((prev) => prev.filter((v) => v.id !== deletedId));
           }
         } catch {
           // Ignore malformed WS payloads
@@ -326,12 +413,16 @@ export default function App() {
       setSessionExpiresAt(null);
       setAuthNotice('');
       setUsers([]);
+      setRegions([]);
       setDevices([]);
       setTickets([]);
       setVisits([]);
       setNotifications([]);
       setLiveToast(null);
       setFocusedTicketId(null);
+      setFocusedVisitId(null);
+      setTicketDraftPrefill(null);
+      setIsRegionModalOpen(false);
       setMobileMenuOpen(false);
     }
   };
@@ -342,7 +433,13 @@ export default function App() {
       void apiFetch(`/api/notifications/${notif.id}/read`, { method: 'PATCH' }).catch(() => {});
     }
     if (liveToast?.id === notif.id) setLiveToast(null);
-    if (notif.ticketId) {
+
+    if (notif.type === 'device_offline') {
+      setCurrentTab('infrastructure');
+    } else if (notif.type === 'visit_submitted' || notif.type === 'visit_reviewed') {
+      if (notif.ticketCode) setFocusedVisitId(notif.ticketCode);
+      setCurrentTab('visits');
+    } else if (notif.ticketId) {
       setFocusedTicketId(notif.ticketId);
       setCurrentTab('ticketing');
     }
@@ -351,6 +448,30 @@ export default function App() {
   const handleMarkAllNotificationsRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
     void apiFetch('/api/notifications/read-all', { method: 'POST' }).catch(() => {});
+  };
+
+  const handleCreateTicketFromDevice = (device: InfrastructureDevice) => {
+    setTicketDraftPrefill({
+      title: `${device.status.toUpperCase()}: ${device.name} (${device.branchUnit})`,
+      category: mapDeviceTypeToTicketCategory(device.type),
+      priority: device.status === 'offline' ? 'Critical' : 'High',
+      branchUnit: device.branchUnit,
+      deviceId: device.id,
+      description: `Perangkat ${device.name} (${device.ipAddress}:${device.port}) wilayah ${device.region} terdeteksi berstatus ${device.status.toUpperCase()}. CPU ${device.cpuUsage}%, RAM ${device.memoryUsage}%, Suhu ${device.temperature}°C.`,
+    });
+    setCurrentTab('ticketing');
+  };
+
+  const handleCreateTicketFromVisit = (visit: FieldVisitReport) => {
+    setTicketDraftPrefill({
+      title: `Tindak Lanjut ${visit.code}: ${visit.branchUnit}`,
+      category: mapVisitCategoryToTicketCategory(visit.category),
+      priority: 'High',
+      branchUnit: visit.branchUnit,
+      deviceId: '',
+      description: `Tindak lanjut dari laporan visit ${visit.code} (${visit.visitDate}, wilayah ${visit.region}).\n\nTemuan Lapangan:\n${visit.findings}${visit.recommendations ? `\n\nRekomendasi:\n${visit.recommendations}` : ''}`,
+    });
+    setCurrentTab('ticketing');
   };
 
   if (bootLoading) {
@@ -390,6 +511,14 @@ export default function App() {
     masterprompt: 'Master Prompt & Stack',
   };
 
+  const toastHasAction = Boolean(
+    liveToast &&
+      (liveToast.ticketId ||
+        liveToast.type === 'device_offline' ||
+        liveToast.type === 'visit_submitted' ||
+        liveToast.type === 'visit_reviewed')
+  );
+
   return (
     <div className="flex h-[100dvh] bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden">
       <Sidebar
@@ -427,12 +556,12 @@ export default function App() {
               <p className="font-bold text-white truncate">{liveToast.title}</p>
               <p className="text-slate-300 mt-0.5 line-clamp-2 leading-relaxed">{liveToast.message}</p>
               <div className="flex items-center gap-2 mt-2">
-                {liveToast.ticketId && (
+                {toastHasAction && (
                   <button
                     onClick={() => handleClickNotification(liveToast)}
                     className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold text-[11px] transition"
                   >
-                    Buka Tugas
+                    Buka Detail
                   </button>
                 )}
                 <button
@@ -460,7 +589,16 @@ export default function App() {
               devices={devices}
               tickets={tickets}
               visits={visits}
+              regions={regions}
               onNavigate={setCurrentTab}
+              onSelectTicket={(id) => {
+                setFocusedTicketId(id);
+                setCurrentTab('ticketing');
+              }}
+              onSelectVisit={(id) => {
+                setFocusedVisitId(id);
+                setCurrentTab('visits');
+              }}
               onOpenNewDevice={() => {
                 setCurrentTab('infrastructure');
                 if (canManageDevices(currentUser.role)) setIsCreateDeviceModalOpen(true);
@@ -480,10 +618,14 @@ export default function App() {
             <InfrastructureView
               currentUser={currentUser}
               devices={devices}
+              regions={regions}
               globalSearch={searchTerm}
-              onCreated={(dev) => setDevices((prev) => [dev, ...prev])}
+              onCreated={(dev) => setDevices((prev) => (prev.some((d) => d.id === dev.id) ? prev : [dev, ...prev]))}
               onUpdated={(dev) => setDevices((prev) => prev.map((d) => (d.id === dev.id ? dev : d)))}
+              onDevicesSynced={(nextList) => setDevices(nextList)}
               onDeleted={(id) => setDevices((prev) => prev.filter((d) => d.id !== id))}
+              onOpenRegionManager={() => setIsRegionModalOpen(true)}
+              onCreateTicketFromDevice={handleCreateTicketFromDevice}
               isCreateModalOpen={isCreateDeviceModalOpen}
               setIsCreateModalOpen={setIsCreateDeviceModalOpen}
             />
@@ -503,6 +645,8 @@ export default function App() {
               setIsCreateModalOpen={setIsCreateTicketModalOpen}
               focusedTicketId={focusedTicketId}
               onClearFocusedTicket={() => setFocusedTicketId(null)}
+              draftPrefill={ticketDraftPrefill}
+              onClearDraftPrefill={() => setTicketDraftPrefill(null)}
             />
           )}
 
@@ -510,12 +654,18 @@ export default function App() {
             <FieldVisitsView
               currentUser={currentUser}
               visits={visits}
+              regions={regions}
+              users={users}
               globalSearch={searchTerm}
-              onCreated={(vst) => setVisits((prev) => [vst, ...prev])}
+              onCreated={(vst) => setVisits((prev) => (prev.some((v) => v.id === vst.id) ? prev : [vst, ...prev]))}
               onUpdated={(vst) => setVisits((prev) => prev.map((v) => (v.id === vst.id ? vst : v)))}
               onDeleted={(id) => setVisits((prev) => prev.filter((v) => v.id !== id))}
               isCreateModalOpen={isCreateVisitModalOpen}
               setIsCreateModalOpen={setIsCreateVisitModalOpen}
+              focusedVisitId={focusedVisitId}
+              onClearFocusedVisit={() => setFocusedVisitId(null)}
+              onOpenRegionManager={() => setIsRegionModalOpen(true)}
+              onCreateTicketFromVisit={handleCreateTicketFromVisit}
             />
           )}
 
@@ -543,6 +693,33 @@ export default function App() {
           {currentTab === 'masterprompt' && <MasterPromptView />}
         </main>
       </div>
+
+      <RegionManagerModal
+        isOpen={isRegionModalOpen}
+        onClose={() => setIsRegionModalOpen(false)}
+        regions={regions}
+        devices={devices}
+        visits={visits}
+        onCreated={(reg) =>
+          setRegions((prev) =>
+            prev.some((r) => r.id === reg.id)
+              ? prev
+              : [...prev, reg].sort((a, b) => a.name.localeCompare(b.name))
+          )
+        }
+        onUpdated={(reg, previousName) => {
+          setRegions((prev) =>
+            prev
+              .map((r) => (r.id === reg.id ? reg : r))
+              .sort((a, b) => a.name.localeCompare(b.name))
+          );
+          if (previousName && previousName !== reg.name) {
+            setDevices((prev) => prev.map((d) => (d.region === previousName ? { ...d, region: reg.name } : d)));
+            setVisits((prev) => prev.map((v) => (v.region === previousName ? { ...v, region: reg.name } : v)));
+          }
+        }}
+        onDeleted={(id) => setRegions((prev) => prev.filter((r) => r.id !== id))}
+      />
 
       <MobileBottomNav
         currentTab={currentTab}

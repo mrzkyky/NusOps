@@ -9,8 +9,15 @@ import {
   ArrowUpRight,
   MapPin,
   Plus,
+  Siren,
 } from 'lucide-react';
-import { InfrastructureDevice, Ticket, FieldVisitReport, UserProfile } from '../types';
+import {
+  InfrastructureDevice,
+  Ticket,
+  FieldVisitReport,
+  UserProfile,
+  RegionItem,
+} from '../types';
 import { formatRelativeTime } from '../lib/api';
 import { canCreateOrManageTickets, canManageDevices } from '../lib/permissions';
 
@@ -19,7 +26,10 @@ interface DashboardOverviewProps {
   devices: InfrastructureDevice[];
   tickets: Ticket[];
   visits: FieldVisitReport[];
+  regions: RegionItem[];
   onNavigate: (tab: string) => void;
+  onSelectTicket?: (ticketId: string) => void;
+  onSelectVisit?: (visitId: string) => void;
   onOpenNewDevice: () => void;
   onOpenNewTicket: () => void;
   onOpenNewVisit: () => void;
@@ -30,7 +40,10 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   devices,
   tickets,
   visits,
+  regions,
   onNavigate,
+  onSelectTicket,
+  onSelectVisit,
   onOpenNewDevice,
   onOpenNewTicket,
   onOpenNewVisit,
@@ -42,6 +55,21 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   const offlineCount = devices.filter((d) => d.status === 'offline').length;
   const openTicketsCount = tickets.filter((t) => t.status === 'Open' || t.status === 'In Progress').length;
   const totalCost = visits.reduce((acc, v) => acc + v.costRp, 0);
+
+  const regionNames = Array.from(
+    new Set([
+      ...regions.map((r) => r.name),
+      ...devices.map((d) => d.region).filter(Boolean),
+      ...visits.map((v) => v.region).filter(Boolean),
+    ])
+  );
+
+  const attentionDevices = devices.filter((d) => d.status !== 'online').slice(0, 4);
+  const urgentTickets = tickets
+    .filter((t) => (t.status === 'Open' || t.status === 'In Progress') && (t.priority === 'Critical' || t.priority === 'High'))
+    .slice(0, 4);
+  const pendingVisits = visits.filter((v) => v.status === 'Submitted').slice(0, 4);
+  const totalActionNeeded = attentionDevices.length + urgentTickets.length + pendingVisits.length;
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 pb-28 lg:pb-8 space-y-5 sm:space-y-6 max-w-7xl mx-auto min-w-0 overflow-x-hidden">
@@ -55,7 +83,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             Monitoring Perangkat, Tiket Insiden & Laporan Visit Unit
           </h2>
           <p className="mt-2 text-xs sm:text-sm text-slate-300 leading-relaxed">
-            Pantau perangkat di seluruh cabang, kelola penanganan gangguan, serta catat agenda visit lapangan dan maintenance rutin dalam satu tempat.
+            Pantau perangkat di seluruh wilayah & cabang, kelola penanganan gangguan secara real-time, serta catat agenda visit lapangan dan maintenance rutin dalam satu tempat.
           </p>
 
           <div className="mt-5 flex flex-wrap items-center gap-2.5">
@@ -134,7 +162,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
             {visits.length} Laporan
           </p>
           <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-            Cuci AC, Server & UPS
+            {pendingVisits.length} menunggu review
           </p>
         </button>
 
@@ -154,6 +182,128 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           </p>
         </button>
       </div>
+
+      {/* Action Needed Spotlight (Only if there are live issues/approvals pending) */}
+      {totalActionNeeded > 0 && (
+        <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-rose-200/80 dark:border-rose-900/50 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Siren className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                Perlu Tindak Lanjut Segera
+              </h3>
+            </div>
+            <span className="text-[11px] font-bold text-rose-600 dark:text-rose-400 tabular-nums">
+              {totalActionNeeded} item aktif
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            {attentionDevices.map((d) => (
+              <button
+                key={d.id}
+                onClick={() => onNavigate('infrastructure')}
+                className="text-left p-3 rounded-xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200/70 dark:border-rose-900/50 hover:border-rose-400 transition"
+              >
+                <p className="font-mono font-bold text-rose-700 dark:text-rose-300 truncate">
+                  [{d.status.toUpperCase()}] {d.name}
+                </p>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 truncate mt-0.5">
+                  {d.branchUnit} · {d.region}
+                </p>
+              </button>
+            ))}
+
+            {urgentTickets.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => (onSelectTicket ? onSelectTicket(t.id) : onNavigate('ticketing'))}
+                className="text-left p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/70 dark:border-amber-900/50 hover:border-amber-400 transition"
+              >
+                <p className="font-mono font-bold text-amber-700 dark:text-amber-300 truncate">
+                  [{t.priority}] {t.code}
+                </p>
+                <p className="text-[11px] text-slate-700 dark:text-slate-200 font-semibold truncate mt-0.5">
+                  {t.title}
+                </p>
+              </button>
+            ))}
+
+            {pendingVisits.map((v) => (
+              <button
+                key={v.id}
+                onClick={() => (onSelectVisit ? onSelectVisit(v.id) : onNavigate('visits'))}
+                className="text-left p-3 rounded-xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/70 dark:border-blue-900/50 hover:border-blue-400 transition"
+              >
+                <p className="font-mono font-bold text-blue-700 dark:text-blue-300 truncate">
+                  [Review Visit] {v.code}
+                </p>
+                <p className="text-[11px] text-slate-700 dark:text-slate-200 font-semibold truncate mt-0.5">
+                  {v.branchUnit} · {v.teamLead}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Regional Breakdown Live Summary */}
+      {regionNames.length > 0 && (
+        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                Ringkasan per Wilayah ({regionNames.length})
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Rekap langsung jumlah perangkat, kesehatan jaringan, dan laporan visit tiap area.
+              </p>
+            </div>
+            <button
+              onClick={() => onNavigate('infrastructure')}
+              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+            >
+              <span>Detail</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {regionNames.map((regName) => {
+              const regDevices = devices.filter((d) => d.region === regName);
+              const regVisits = visits.filter((v) => v.region === regName);
+              const regDown = regDevices.filter((d) => d.status !== 'online').length;
+              const regMeta = regions.find((r) => r.name === regName);
+
+              return (
+                <button
+                  key={regName}
+                  onClick={() => onNavigate(regDevices.length > 0 ? 'infrastructure' : 'visits')}
+                  className="text-left p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-800 hover:border-blue-400 transition space-y-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-900 dark:text-white truncate">{regName}</span>
+                    {regMeta?.code && (
+                      <span className="text-[10px] font-mono font-bold text-slate-500 dark:text-slate-400 shrink-0">
+                        {regMeta.code}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] tabular-nums">
+                    <span className="text-slate-600 dark:text-slate-300">{regDevices.length} perangkat</span>
+                    <span className={regDown > 0 ? 'font-bold text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400 font-semibold'}>
+                      {regDown > 0 ? `${regDown} isu` : 'Normal'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums truncate">
+                    {regVisits.length} visit{regMeta?.picName ? ` · PIC: ${regMeta.picName}` : ''}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Main Two-Column Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -217,9 +367,9 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
 
                     <div className="flex items-center gap-4 shrink-0">
                       <div className="hidden sm:block text-right tabular-nums">
-                        <p className="text-[11px] text-slate-400">CPU / Temp</p>
+                        <p className="text-[11px] text-slate-400">Uptime / Temp</p>
                         <p className="text-xs font-mono font-semibold text-slate-800 dark:text-slate-200">
-                          {device.cpuUsage}% / {device.temperature}°C
+                          {device.uptimePct}% / {device.temperature}°C
                         </p>
                       </div>
                       <span
@@ -269,7 +419,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                 {visits.slice(0, 4).map((visit) => (
                   <div
                     key={visit.id}
-                    onClick={() => onNavigate('visits')}
+                    onClick={() => (onSelectVisit ? onSelectVisit(visit.id) : onNavigate('visits'))}
                     className="py-3 cursor-pointer hover:bg-slate-50/70 dark:hover:bg-slate-800/40 px-2 rounded-xl transition"
                   >
                     <div className="flex items-center justify-between gap-2">

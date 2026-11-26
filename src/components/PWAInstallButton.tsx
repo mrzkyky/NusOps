@@ -16,6 +16,7 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
   const [isInstalled, setIsInstalled] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
   const [isInIframe, setIsInIframe] = useState(false);
+  const [isInsecureHttp, setIsInsecureHttp] = useState(false);
   const [showGuideModal, setShowGuideModal] = useState(false);
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
 
     const userAgent = window.navigator.userAgent.toLowerCase();
     setIsIOS(/iphone|ipad|ipod/.test(userAgent));
+    setIsInsecureHttp(typeof window !== 'undefined' && window.isSecureContext === false);
 
     try {
       setIsInIframe(window.self !== window.top);
@@ -115,6 +117,12 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
             </div>
 
             <div className="mt-4 space-y-3 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              {isInsecureHttp && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200">
+                  Server sedang diakses lewat <strong>HTTP tanpa SSL</strong> (<span className="font-mono">{window.location.origin}</span>). Browser Android, iOS, dan Desktop mewajibkan <strong>HTTPS</strong> agar tombol <strong>Install Aplikasi (PWA)</strong> & notifikasi browser aktif. Pasang HTTPS di depan server (misal Cloudflare Tunnel, Nginx + SSL, atau Caddy).
+                </div>
+              )}
+
               {isInIframe && (
                 <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
                   Anda sedang membuka halaman di dalam frame preview. Browser memblokir instalasi PWA dari dalam iframe—buka URL aplikasi di tab browser baru terlebih dahulu.

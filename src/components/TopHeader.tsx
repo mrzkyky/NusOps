@@ -180,7 +180,13 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                               : 'bg-blue-50/80 dark:bg-blue-950/35 border-blue-200 dark:border-blue-800/70 hover:bg-blue-100/70'
                           }`}
                         >
-                          <ClipboardList className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                          {n.type === 'device_offline' ? (
+                            <Server className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                          ) : n.type === 'visit_submitted' || n.type === 'visit_reviewed' ? (
+                            <ClipboardList className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+                          ) : (
+                            <ClipboardList className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                          )}
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center justify-between gap-1.5">
                               <p className="text-xs font-bold text-slate-900 dark:text-white truncate">{n.title}</p>

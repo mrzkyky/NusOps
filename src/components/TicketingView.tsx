@@ -18,7 +18,7 @@ import {
   CheckCircle2,
   Lock,
 } from 'lucide-react';
-import { Ticket, TicketPriority, TicketStatus, TicketAttachment, UserProfile, InfrastructureDevice } from '../types';
+import { Ticket, TicketPriority, TicketStatus, TicketAttachment, TicketDraftPrefill, UserProfile, InfrastructureDevice } from '../types';
 import { apiFetch, compressAndUploadImage, uploadAttachmentFile, formatDateTime, formatRelativeTime } from '../lib/api';
 import { canCreateOrManageTickets } from '../lib/permissions';
 
@@ -35,6 +35,8 @@ interface TicketingViewProps {
   setIsCreateModalOpen: (open: boolean) => void;
   focusedTicketId?: string | null;
   onClearFocusedTicket?: () => void;
+  draftPrefill?: TicketDraftPrefill | null;
+  onClearDraftPrefill?: () => void;
 }
 
 function formatFileSize(bytes: number): string {
@@ -56,6 +58,8 @@ export const TicketingView: React.FC<TicketingViewProps> = ({
   setIsCreateModalOpen,
   focusedTicketId,
   onClearFocusedTicket,
+  draftPrefill,
+  onClearDraftPrefill,
 }) => {
   const canManageTickets = canCreateOrManageTickets(currentUser.role);
   const [statusFilter, setStatusFilter] = useState<string>('All');
@@ -117,6 +121,19 @@ export const TicketingView: React.FC<TicketingViewProps> = ({
     }
     onClearFocusedTicket?.();
   }, [focusedTicketId, tickets, onClearFocusedTicket]);
+
+  useEffect(() => {
+    if (!draftPrefill) return;
+    setTitle(draftPrefill.title);
+    setCategory(draftPrefill.category);
+    setPriority(draftPrefill.priority);
+    setBranchUnit(draftPrefill.branchUnit);
+    setDeviceId(draftPrefill.deviceId);
+    setDescription(draftPrefill.description);
+    setFormError('');
+    setIsCreateModalOpen(true);
+    onClearDraftPrefill?.();
+  }, [draftPrefill, onClearDraftPrefill, setIsCreateModalOpen]);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

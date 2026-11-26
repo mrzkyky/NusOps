@@ -20,13 +20,31 @@ export interface UserProfile {
   createdAt?: string;
 }
 
+export interface RegionItem {
+  id: string;
+  name: string;
+  code: string;
+  picName: string;
+  description: string;
+  createdAt?: string;
+}
+
+export interface HostMetrics {
+  hostname: string;
+  platform: string;
+  cpuUsage: number;
+  memoryUsage: number;
+  diskUsage: number;
+  uptimeSeconds: number;
+}
+
 export type DeviceStatus = 'online' | 'warning' | 'offline';
 
 export interface InfrastructureDevice {
   id: string;
   name: string;
   type: 'Server' | 'Core Router' | 'Switch' | 'UPS Power' | 'AC Cooling Unit';
-  region: 'Jabodetabek' | 'Jawa Barat' | 'Jawa Timur' | 'Sumatera Utara' | 'Sulawesi Selatan' | 'Bali Nusra' | 'Kalimantan';
+  region: string;
   branchUnit: string;
   ipAddress: string;
   port: number;
@@ -93,6 +111,15 @@ export interface Ticket {
   comments: TicketComment[];
 }
 
+export interface TicketDraftPrefill {
+  title: string;
+  category: Ticket['category'];
+  priority: TicketPriority;
+  branchUnit: string;
+  deviceId: string;
+  description: string;
+}
+
 export type VisitCategory =
   | 'AC Cleaning & Service'
   | 'Server Rack Audit'
@@ -130,7 +157,7 @@ export interface FieldVisitReport {
 export interface AppNotification {
   id: string;
   userId: string;
-  type: 'task_assigned' | 'ticket_comment';
+  type: 'task_assigned' | 'ticket_comment' | 'device_offline' | 'visit_submitted' | 'visit_reviewed';
   title: string;
   message: string;
   ticketId: string;
@@ -139,4 +166,3 @@ export interface AppNotification {
   isRead: boolean;
   createdAt: string;
 }
-

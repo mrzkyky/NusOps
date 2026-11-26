@@ -116,3 +116,32 @@ docker run --rm -v nusantaraops_nusantaraops_data:/data -v "$(pwd)":/backup alpi
 docker run --rm -v nusantaraops_nusantaraops_uploads:/uploads -v "$(pwd)":/backup alpine \
   tar czf /backup/nusantaraops-uploads-$(date +%F).tar.gz -C /uploads .
 ```
+
+---
+
+## 6. Agar Aplikasi Bisa Diinstall di HP (PWA) & Notifikasi Browser Aktif
+
+Browser (Chrome Android, Safari iOS, dan Edge) **mewajibkan HTTPS** agar fitur **Install App (PWA)** dan **Notifikasi Browser** bisa berjalan (kecuali jika dibuka lewat `http://localhost`). Jika Anda mengakses server memakai `http://IP-SERVER:3000`, tombol install hanya akan memunculkan panduan karena protokolnya belum HTTPS.
+
+Pilihan tercepat mengaktifkan HTTPS di depan Docker port `3000`:
+
+1. **Cloudflare Tunnel (Gratis, tidak perlu buka port router):** arahkan tunnel ke `http://localhost:3000` (WebSocket `/ws` otomatis didukung).
+2. **Caddy (HTTPS Otomatis jika punya domain):**
+   ```caddyfile
+   ops.domainanda.com {
+     reverse_proxy 127.0.0.1:3000
+   }
+   ```
+3. **Nginx + Certbot (pastikan header WebSocket aktif agar notifikasi real-time berjalan):**
+   ```nginx
+   location / {
+     proxy_pass http://127.0.0.1:3000;
+     proxy_http_version 1.1;
+     proxy_set_header Upgrade $http_upgrade;
+     proxy_set_header Connection "upgrade";
+     proxy_set_header Host $host;
+     proxy_set_header X-Forwarded-Proto $scheme;
+     proxy_set_header X-Forwarded-Host $host;
+   }
+   ```
+

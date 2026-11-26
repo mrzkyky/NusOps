@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ClipboardCheck,
   Plus,
@@ -12,20 +12,38 @@ import {
   CheckSquare,
   Square,
   X,
+  CheckCircle2,
+  AlertCircle,
+  MessageSquare,
+  TicketCheck,
+  SlidersHorizontal,
+  Users,
 } from 'lucide-react';
-import { FieldVisitReport, VisitCategory, VisitChecklistItem, UserProfile } from '../types';
+import {
+  FieldVisitReport,
+  VisitCategory,
+  VisitChecklistItem,
+  UserProfile,
+  RegionItem,
+} from '../types';
 import { apiFetch, compressAndUploadImage } from '../lib/api';
-import { canApproveVisits } from '../lib/permissions';
+import { canApproveVisits, canCreateOrManageTickets } from '../lib/permissions';
 
 interface FieldVisitsViewProps {
   currentUser: UserProfile;
   visits: FieldVisitReport[];
+  regions: RegionItem[];
+  users: UserProfile[];
   globalSearch: string;
   onCreated: (visit: FieldVisitReport) => void;
   onUpdated: (visit: FieldVisitReport) => void;
   onDeleted: (id: string) => void;
   isCreateModalOpen: boolean;
   setIsCreateModalOpen: (open: boolean) => void;
+  focusedVisitId?: string | null;
+  onClearFocusedVisit?: () => void;
+  onOpenRegionManager?: () => void;
+  onCreateTicketFromVisit?: (visit: FieldVisitReport) => void;
 }
 
 const DEFAULT_CHECKLISTS: Record<VisitCategory, string[]> = {
@@ -69,29 +87,51 @@ function buildChecklist(cat: VisitCategory): VisitChecklistItem[] {
 export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
   currentUser,
   visits,
+  regions,
+  users,
   globalSearch,
   onCreated,
   onUpdated,
   onDeleted,
   isCreateModalOpen,
   setIsCreateModalOpen,
+  focusedVisitId,
+  onClearFocusedVisit,
+  onOpenRegionManager,
+  onCreateTicketFromVisit,
 }) => {
   const canApprove = canApproveVisits(currentUser.role);
+  const canCreateTickets = canCreateOrManageTickets(currentUser.role);
+
+  const regionNames = Array.from(
+    new Set([
+      ...regions.map((r) => r.name),
+      ...visits.map((v) => v.region).filter(Boolean),
+    ])
+  );
+
   const [selectedVisitId, setSelectedVisitId] = useState<string | null>(null);
   const [mobileShowDetail, setMobileShowDetail] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
+  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [regionFilter, setRegionFilter] = useState<string>('All');
   const [localSearch, setLocalSearch] = useState<string>('');
   const [editingVisit, setEditingVisit] = useState<FieldVisitReport | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reviewSaving, setReviewSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [reviewFeedback, setReviewFeedback] = useState('');
+  const [reviewerNoteInput, setReviewerNoteInput] = useState('');
+  const [previewPhotoUrl, setPreviewPhotoUrl] = useState<string | null>(null);
 
   // Form fields
   const [branchUnit, setBranchUnit] = useState('');
-  const [region, setRegion] = useState('Jabodetabek');
+  const [region, setRegion] = useState(regionNames[0] || 'Jabodetabek');
   const [visitDate, setVisitDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [membersInput, setMembersInput] = useState('');
+  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
+  const [customMembersInput, setCustomMembersInput] = useState('');
   const [category, setCategory] = useState<VisitCategory>('AC Cleaning & Service');
   const [checklist, setChecklist] = useState<VisitChecklistItem[]>(() => buildChecklist('AC Cleaning & Service'));
   const [newCheckItem, setNewCheckItem] = useState('');
@@ -105,23 +145,41 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
 
   const filteredVisits = visits.filter((v) => {
     const matchCategory = categoryFilter === 'All' || v.category === categoryFilter;
+    const matchStatus = statusFilter === 'All' || v.status === statusFilter;
+    const matchRegion = regionFilter === 'All' || v.region === regionFilter;
     const matchSearch =
       !combinedSearch ||
       v.branchUnit.toLowerCase().includes(combinedSearch) ||
       v.code.toLowerCase().includes(combinedSearch) ||
-      v.teamLead.toLowerCase().includes(combinedSearch);
-    return matchCategory && matchSearch;
+      v.teamLead.toLowerCase().includes(combinedSearch) ||
+      v.region.toLowerCase().includes(combinedSearch);
+    return matchCategory && matchStatus && matchRegion && matchSearch;
   });
 
   const selectedVisit =
     visits.find((v) => v.id === selectedVisitId) ||
     (filteredVisits.length > 0 ? filteredVisits[0] : null);
 
+  useEffect(() => {
+    if (!focusedVisitId) return;
+    if (visits.some((v) => v.id === focusedVisitId)) {
+      setSelectedVisitId(focusedVisitId);
+      setMobileShowDetail(true);
+    }
+    onClearFocusedVisit?.();
+  }, [focusedVisitId, visits, onClearFocusedVisit]);
+
+  useEffect(() => {
+    setReviewerNoteInput(selectedVisit?.reviewerNote || '');
+    setReviewFeedback('');
+  }, [selectedVisit?.id, selectedVisit?.reviewerNote]);
+
   const resetForm = () => {
     setBranchUnit('');
-    setRegion('Jabodetabek');
+    setRegion(regionNames[0] || 'Jabodetabek');
     setVisitDate(new Date().toISOString().slice(0, 10));
-    setMembersInput('');
+    setSelectedMembers([]);
+    setCustomMembersInput('');
     setCategory('AC Cleaning & Service');
     setChecklist(buildChecklist('AC Cleaning & Service'));
     setNewCheckItem('');
@@ -136,9 +194,11 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
   const openEdit = (v: FieldVisitReport) => {
     setEditingVisit(v);
     setBranchUnit(v.branchUnit);
-    setRegion(v.region);
+    setRegion(v.region || regionNames[0] || '');
     setVisitDate(v.visitDate);
-    setMembersInput(v.members.join(', '));
+    const knownUserNames = new Set(users.map((u) => u.name));
+    setSelectedMembers((v.members || []).filter((m) => knownUserNames.has(m)));
+    setCustomMembersInput((v.members || []).filter((m) => !knownUserNames.has(m)).join(', '));
     setCategory(v.category);
     setChecklist(v.checklist?.length ? v.checklist : buildChecklist(v.category));
     setSummary(v.summary);
@@ -147,6 +207,12 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
     setCostRp(String(v.costRp));
     setPhotos(v.photos || []);
     setFormError('');
+  };
+
+  const toggleMember = (memberName: string) => {
+    setSelectedMembers((prev) =>
+      prev.includes(memberName) ? prev.filter((m) => m !== memberName) : [...prev, memberName]
+    );
   };
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -173,14 +239,17 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
     setFormError('');
     setSaving(true);
     try {
+      const customList = customMembersInput
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const mergedMembers = Array.from(new Set([...selectedMembers, ...customList]));
+
       const payload = {
         branchUnit,
         region,
         visitDate,
-        members: membersInput
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean),
+        members: mergedMembers,
         category,
         checklist,
         summary,
@@ -232,15 +301,27 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
     }
   };
 
-  const handleStatusChange = async (id: string, status: FieldVisitReport['status']) => {
+  const handleReviewSubmit = async (
+    visitId: string,
+    status: FieldVisitReport['status'],
+    note?: string
+  ) => {
+    setReviewSaving(true);
+    setReviewFeedback('');
     try {
-      const res = await apiFetch<{ visit: FieldVisitReport }>(`/api/visits/${id}`, {
+      const res = await apiFetch<{ visit: FieldVisitReport }>(`/api/visits/${visitId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({
+          status,
+          reviewerNote: note !== undefined ? note.trim() : reviewerNoteInput.trim(),
+        }),
       });
       onUpdated(res.visit);
+      setReviewFeedback(`Status diperbarui menjadi "${res.visit.status}" & notifikasi dikirim ke tim.`);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Gagal mengubah status laporan');
+      setReviewFeedback(err instanceof Error ? err.message : 'Gagal menyimpan review');
+    } finally {
+      setReviewSaving(false);
     }
   };
 
@@ -258,7 +339,7 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
   };
 
   const handleExportCsv = () => {
-    const headers = ['Kode', 'Tanggal', 'Wilayah', 'Unit Cabang', 'Kategori', 'Ketua Tim', 'Anggota', 'Status', 'Biaya (Rp)', 'Ringkasan', 'Temuan', 'Rekomendasi'];
+    const headers = ['Kode', 'Tanggal', 'Wilayah', 'Unit Cabang', 'Kategori', 'Ketua Tim', 'Anggota', 'Status', 'Catatan Reviewer', 'Biaya (Rp)', 'Ringkasan', 'Temuan', 'Rekomendasi'];
     const escapeCell = (val: string | number) => `"${String(val).replace(/"/g, '""')}"`;
     const rows = filteredVisits.map((v) =>
       [
@@ -270,6 +351,7 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
         v.teamLead,
         v.members.join('; '),
         v.status,
+        v.reviewerNote || '',
         v.costRp,
         v.summary,
         v.findings,
@@ -288,6 +370,10 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  const submittedCount = filteredVisits.filter((v) => v.status === 'Submitted').length;
+  const approvedCount = filteredVisits.filter((v) => v.status === 'Approved').length;
+  const filteredCost = filteredVisits.reduce((acc, v) => acc + v.costRp, 0);
+
   const modalOpen = isCreateModalOpen || Boolean(editingVisit);
 
   return (
@@ -299,7 +385,7 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
             Kunjungan Cabang & Daily Report
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Catat agenda visit unit (cuci AC, audit server, cek UPS), checklist pekerjaan, foto dokumentasi, dan ekspor laporan.
+            Catat agenda visit unit, pilih tim dari akun terdaftar, dokumentasi foto, serta approval real-time dengan catatan reviewer.
           </p>
         </div>
 
@@ -323,6 +409,28 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
         </div>
       </div>
 
+      {/* Live Visit Summary Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 no-print">
+        <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+          <p className="text-[11px] font-semibold text-slate-500">Total Laporan</p>
+          <p className="text-lg font-extrabold text-slate-900 dark:text-white mt-0.5 tabular-nums">{filteredVisits.length}</p>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+          <p className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">Menunggu Review</p>
+          <p className="text-lg font-extrabold text-slate-900 dark:text-white mt-0.5 tabular-nums">{submittedCount}</p>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+          <p className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Disetujui</p>
+          <p className="text-lg font-extrabold text-slate-900 dark:text-white mt-0.5 tabular-nums">{approvedCount}</p>
+        </div>
+        <div className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+          <p className="text-[11px] font-semibold text-slate-500">Total Biaya</p>
+          <p className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white mt-0.5 font-mono tabular-nums truncate">
+            Rp {filteredCost.toLocaleString('id-ID')}
+          </p>
+        </div>
+      </div>
+
       {/* Filter toolbar */}
       <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3 no-print">
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
@@ -341,15 +449,57 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
           ))}
         </div>
 
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-          <input
-            type="text"
-            value={localSearch}
-            onChange={(e) => setLocalSearch(e.target.value)}
-            placeholder="Cari unit cabang, kode laporan, atau ketua tim..."
-            className="w-full min-h-[40px] pl-8 pr-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-100 focus:outline-none"
-          />
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+          {['All', 'Submitted', 'Approved', 'Revision Required'].map((st) => (
+            <button
+              key={st}
+              onClick={() => setStatusFilter(st)}
+              className={`min-h-[32px] px-2.5 py-1 text-[11px] font-medium rounded-lg whitespace-nowrap shrink-0 transition-colors ${
+                statusFilter === st
+                  ? 'bg-blue-600 text-white font-semibold'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              {st === 'All' ? 'Semua Status' : st}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+          <div className="flex items-center gap-2">
+            <select
+              value={regionFilter}
+              onChange={(e) => setRegionFilter(e.target.value)}
+              className="flex-1 sm:flex-initial min-h-[40px] px-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-200 focus:outline-none"
+            >
+              <option value="All">Semua Wilayah</option>
+              {regionNames.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+
+            {canApprove && onOpenRegionManager && (
+              <button
+                onClick={onOpenRegionManager}
+                className="min-h-[40px] px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900/60 text-xs font-semibold flex items-center gap-1.5 shrink-0"
+                title="Kelola Master Wilayah"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Wilayah</span>
+              </button>
+            )}
+          </div>
+
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+            <input
+              type="text"
+              value={localSearch}
+              onChange={(e) => setLocalSearch(e.target.value)}
+              placeholder="Cari unit cabang, kode laporan, wilayah, atau ketua tim..."
+              className="w-full min-h-[40px] pl-8 pr-3 py-1.5 text-xs bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-100 focus:outline-none"
+            />
+          </div>
         </div>
       </div>
 
@@ -363,7 +513,7 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
             <p className="text-xs text-slate-500 mt-1">
               {visits.length === 0
                 ? 'Catat hasil visit cabang seperti cuci AC, pengecekan server, dan maintenance unit.'
-                : 'Coba ubah kategori atau kata kunci pencarian.'}
+                : 'Coba ubah kategori, wilayah, status, atau kata kunci pencarian.'}
             </p>
           </div>
           {visits.length === 0 && (
@@ -397,7 +547,9 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">{visit.code}</span>
+                    <span className="text-xs font-mono font-bold text-blue-600 dark:text-blue-400">
+                      {visit.code} · {visit.region}
+                    </span>
                     <span
                       className={`text-[11px] font-bold ${
                         visit.status === 'Approved'
@@ -445,29 +597,18 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 shrink-0 no-print">
-                    {canApprove ? (
-                      <select
-                        value={selectedVisit.status}
-                        onChange={(e) => handleStatusChange(selectedVisit.id, e.target.value as FieldVisitReport['status'])}
-                        className="min-h-[38px] px-3 py-1.5 text-xs font-semibold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-slate-100"
-                      >
-                        <option value="Submitted">Submitted</option>
-                        <option value="Approved">Approved</option>
-                        <option value="Revision Required">Revision Required</option>
-                      </select>
-                    ) : (
-                      <span
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold ${
-                          selectedVisit.status === 'Approved'
-                            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
-                            : selectedVisit.status === 'Revision Required'
-                            ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300'
-                            : 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
-                        }`}
-                      >
-                        {selectedVisit.status}
-                      </span>
-                    )}
+                    <span
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold ${
+                        selectedVisit.status === 'Approved'
+                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+                          : selectedVisit.status === 'Revision Required'
+                          ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300'
+                          : 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+                      }`}
+                    >
+                      {selectedVisit.status}
+                    </span>
+
                     {(canApprove || selectedVisit.teamLeadId === currentUser.id) && (
                       <button
                         onClick={() => openEdit(selectedVisit)}
@@ -495,6 +636,27 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Reviewer Note Display Banner */}
+                {selectedVisit.reviewerNote && (
+                  <div
+                    className={`p-3.5 rounded-xl border flex items-start gap-2.5 text-xs ${
+                      selectedVisit.status === 'Approved'
+                        ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/60 text-emerald-900 dark:text-emerald-200'
+                        : selectedVisit.status === 'Revision Required'
+                        ? 'bg-rose-50/80 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/60 text-rose-900 dark:text-rose-200'
+                        : 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/60 text-amber-900 dark:text-amber-200'
+                    }`}
+                  >
+                    <MessageSquare className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="font-bold">Catatan Reviewer / Pimpinan</p>
+                      <p className="mt-0.5 whitespace-pre-wrap break-words leading-relaxed">
+                        {selectedVisit.reviewerNote}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 text-xs">
                   <div>
@@ -558,27 +720,95 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
                   )}
                 </div>
 
-                {/* Uploaded Photos */}
+                {/* Uploaded Photos (In-App Lightbox) */}
                 <div>
                   <h4 className="text-xs font-bold text-slate-400 mb-2">Dokumentasi Foto ({selectedVisit.photos.length})</h4>
                   {selectedVisit.photos.length === 0 ? (
                     <p className="text-xs text-slate-400">Tidak ada foto dilampirkan.</p>
                   ) : (
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       {selectedVisit.photos.map((photo, i) => (
-                        <a
+                        <button
                           key={i}
-                          href={photo}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="block rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 aspect-video"
+                          type="button"
+                          onClick={() => setPreviewPhotoUrl(photo)}
+                          className="block rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 aspect-video hover:opacity-90 transition"
                         >
                           <img src={photo} alt={`Dokumentasi ${i + 1}`} className="w-full h-full object-cover" />
-                        </a>
+                        </button>
                       ))}
                     </div>
                   )}
                 </div>
+
+                {/* Follow-up to Ticket CTA */}
+                {canCreateTickets && onCreateTicketFromVisit && (
+                  <div className="pt-2 no-print">
+                    <button
+                      type="button"
+                      onClick={() => onCreateTicketFromVisit(selectedVisit)}
+                      className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 text-xs font-semibold flex items-center gap-2 transition"
+                    >
+                      <TicketCheck className="w-4 h-4 text-blue-500" />
+                      <span>Tindak Lanjut Temuan ke Tiket Insiden</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Approver Review Box */}
+                {canApprove && (
+                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-3 text-xs no-print">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-bold text-slate-900 dark:text-white">Panel Review & Approval Pimpinan</h4>
+                      <span className="text-[11px] text-slate-400">Kirim status + catatan langsung ke pelapor</span>
+                    </div>
+
+                    <textarea
+                      rows={2}
+                      value={reviewerNoteInput}
+                      onChange={(e) => setReviewerNoteInput(e.target.value)}
+                      placeholder="Tulis catatan approval atau poin yang perlu direvisi teknisi..."
+                      className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+
+                    {reviewFeedback && (
+                      <p className="text-[11px] font-medium text-blue-600 dark:text-blue-400">{reviewFeedback}</p>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={reviewSaving}
+                        onClick={() => handleReviewSubmit(selectedVisit.id, 'Approved')}
+                        className="min-h-[38px] px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-semibold flex items-center gap-1.5 transition"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Setujui Laporan</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={reviewSaving}
+                        onClick={() => handleReviewSubmit(selectedVisit.id, 'Revision Required')}
+                        className="min-h-[38px] px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-60 text-white font-semibold flex items-center gap-1.5 transition"
+                      >
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        <span>Minta Revisi</span>
+                      </button>
+
+                      {selectedVisit.status !== 'Submitted' && (
+                        <button
+                          type="button"
+                          disabled={reviewSaving}
+                          onClick={() => handleReviewSubmit(selectedVisit.id, 'Submitted')}
+                          className="min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold"
+                        >
+                          Kembalikan ke Submitted
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -617,19 +847,31 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Wilayah</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-semibold text-slate-700 dark:text-slate-300">Wilayah</label>
+                    {canApprove && onOpenRegionManager && (
+                      <button
+                        type="button"
+                        onClick={onOpenRegionManager}
+                        className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        + Kelola
+                      </button>
+                    )}
+                  </div>
                   <select
+                    required
                     value={region}
                     onChange={(e) => setRegion(e.target.value)}
                     className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                   >
-                    <option value="Jabodetabek">Jabodetabek</option>
-                    <option value="Jawa Barat">Jawa Barat</option>
-                    <option value="Jawa Timur">Jawa Timur</option>
-                    <option value="Sumatera Utara">Sumatera Utara</option>
-                    <option value="Sulawesi Selatan">Sulawesi Selatan</option>
-                    <option value="Bali Nusra">Bali Nusra</option>
-                    <option value="Kalimantan">Kalimantan</option>
+                    {regionNames.length === 0 ? (
+                      <option value="">Belum ada wilayah</option>
+                    ) : (
+                      regionNames.map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))
+                    )}
                   </select>
                 </div>
 
@@ -656,36 +898,64 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Agenda Pekerjaan</label>
-                  <select
-                    value={category}
-                    onChange={(e) => {
-                      const nextCat = e.target.value as VisitCategory;
-                      setCategory(nextCat);
-                      if (!editingVisit) setChecklist(buildChecklist(nextCat));
-                    }}
-                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  >
-                    <option value="AC Cleaning & Service">AC Cleaning & Service</option>
-                    <option value="Server Rack Audit">Server Rack Audit</option>
-                    <option value="UPS Battery Load Test">UPS Battery Load Test</option>
-                    <option value="Network Cable Management">Network Cable Management</option>
-                    <option value="General Infrastructure Check">General Infrastructure Check</option>
-                  </select>
-                </div>
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Agenda Pekerjaan</label>
+                <select
+                  value={category}
+                  onChange={(e) => {
+                    const nextCat = e.target.value as VisitCategory;
+                    setCategory(nextCat);
+                    if (!editingVisit) setChecklist(buildChecklist(nextCat));
+                  }}
+                  className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                >
+                  <option value="AC Cleaning & Service">AC Cleaning & Service</option>
+                  <option value="Server Rack Audit">Server Rack Audit</option>
+                  <option value="UPS Battery Load Test">UPS Battery Load Test</option>
+                  <option value="Network Cable Management">Network Cable Management</option>
+                  <option value="General Infrastructure Check">General Infrastructure Check</option>
+                </select>
+              </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Anggota Tim (pisahkan koma)</label>
-                  <input
-                    type="text"
-                    value={membersInput}
-                    onChange={(e) => setMembersInput(e.target.value)}
-                    placeholder="Contoh: Budi, Andi"
-                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
-                  />
-                </div>
+              {/* Team Member Picker from Registered Accounts */}
+              <div>
+                <label className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  <Users className="w-3.5 h-3.5 text-blue-500" />
+                  <span>Anggota Tim Ikut Visit</span>
+                </label>
+
+                {users.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {users
+                      .filter((u) => u.id !== currentUser.id)
+                      .map((u) => {
+                        const active = selectedMembers.includes(u.name);
+                        return (
+                          <button
+                            key={u.id}
+                            type="button"
+                            onClick={() => toggleMember(u.name)}
+                            className={`min-h-[32px] px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition ${
+                              active
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-blue-400'
+                            }`}
+                          >
+                            {active ? '✓ ' : '+ '}
+                            {u.name} ({u.role})
+                          </button>
+                        );
+                      })}
+                  </div>
+                )}
+
+                <input
+                  type="text"
+                  value={customMembersInput}
+                  onChange={(e) => setCustomMembersInput(e.target.value)}
+                  placeholder="Tambah nama teknisi/vendor eksternal (opsional, pisahkan koma)"
+                  className="w-full min-h-[40px] px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                />
               </div>
 
               {/* Checklist builder */}
@@ -841,6 +1111,39 @@ export const FieldVisitsView: React.FC<FieldVisitsViewProps> = ({
                 Hapus
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Photo Lightbox */}
+      {previewPhotoUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4"
+          onClick={() => setPreviewPhotoUrl(null)}
+        >
+          <div className="relative max-w-3xl w-full flex flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <div className="w-full flex items-center justify-end gap-2">
+              <a
+                href={previewPhotoUrl}
+                download
+                className="min-h-[38px] px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-semibold flex items-center gap-1.5"
+              >
+                <Download className="w-4 h-4" />
+                <span>Unduh</span>
+              </a>
+              <button
+                onClick={() => setPreviewPhotoUrl(null)}
+                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl bg-white/15 hover:bg-white/25 text-white"
+                aria-label="Tutup Preview"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <img
+              src={previewPhotoUrl}
+              alt="Dokumentasi Visit"
+              className="max-h-[80dvh] w-auto rounded-2xl object-contain border border-white/10 shadow-2xl"
+            />
           </div>
         </div>
       )}
