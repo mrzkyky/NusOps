@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { BellRing, X } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { TopHeader } from './components/TopHeader';
 import { MobileBottomNav } from './components/MobileBottomNav';
@@ -10,9 +11,33 @@ import { AccountView } from './components/AccountView';
 import { MasterPromptView } from './components/MasterPromptView';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { AuthGate } from './components/AuthGate';
-import { apiFetch, getSessionExpiresAt, setAuthToken, setUnauthorizedHandler } from './lib/api';
+import { apiFetch, getAuthToken, getSessionExpiresAt, setAuthToken, setUnauthorizedHandler } from './lib/api';
 import { canCreateOrManageTickets, canManageDevices } from './lib/permissions';
-import { InfrastructureDevice, Ticket, FieldVisitReport, UserProfile } from './types';
+import { InfrastructureDevice, Ticket, FieldVisitReport, UserProfile, AppNotification } from './types';
+
+function playNotificationChime() {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1174.66, ctx.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.06, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.26);
+    setTimeout(() => {
+      void ctx.close().catch(() => {});
+    }, 400);
+  } catch {
+    // Ignore audio context errors when autoplay is blocked
+  }
+}
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
@@ -36,6 +61,10 @@ export default function App() {
   const [devices, setDevices] = useState<InfrastructureDevice[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [visits, setVisits] = useState<FieldVisitReport[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [liveToast, setLiveToast] = useState<AppNotification | null>(null);
+  const [focusedTicketId, setFocusedTicketId] = useState<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   // Quick-open modals
   const [isCreateDeviceModalOpen, setIsCreateDeviceModalOpen] = useState(false);
@@ -52,16 +81,18 @@ export default function App() {
   }, [darkMode]);
 
   const loadWorkspaceData = useCallback(async () => {
-    const [uRes, dRes, tRes, vRes] = await Promise.all([
+    const [uRes, dRes, tRes, vRes, nRes] = await Promise.all([
       apiFetch<{ users: UserProfile[] }>('/api/users'),
       apiFetch<{ devices: InfrastructureDevice[] }>('/api/devices'),
       apiFetch<{ tickets: Ticket[] }>('/api/tickets'),
       apiFetch<{ visits: FieldVisitReport[] }>('/api/visits'),
+      apiFetch<{ notifications: AppNotification[] }>('/api/notifications'),
     ]);
     setUsers(uRes.users);
     setDevices(dRes.devices);
     setTickets(tRes.tickets);
     setVisits(vRes.visits);
+    setNotifications(nRes.notifications);
   }, []);
 
   const handleSessionExpired = useCallback(
@@ -73,6 +104,9 @@ export default function App() {
       setDevices([]);
       setTickets([]);
       setVisits([]);
+      setNotifications([]);
+      setLiveToast(null);
+      setFocusedTicketId(null);
       setMobileMenuOpen(false);
       setAuthNotice(message);
     },
@@ -117,6 +151,122 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [currentUser, sessionExpiresAt, handleSessionExpired]);
+
+  // Real-time WebSocket subscription for instant task & ticket notifications
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let disposed = false;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let backoffMs = 2000;
+    let hasConnectedOnce = false;
+
+    const showToast = (notif: AppNotification) => {
+      setLiveToast(notif);
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = window.setTimeout(() => {
+        setLiveToast(null);
+      }, 9000);
+    };
+
+    const resyncAfterReconnect = async () => {
+      try {
+        const [nRes, tRes] = await Promise.all([
+          apiFetch<{ notifications: AppNotification[] }>('/api/notifications'),
+          apiFetch<{ tickets: Ticket[] }>('/api/tickets'),
+        ]);
+        if (!disposed) {
+          setNotifications(nRes.notifications);
+          setTickets(tRes.tickets);
+        }
+      } catch {
+        // Ignore transient resync failure
+      }
+    };
+
+    const connect = () => {
+      if (disposed) return;
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const token = getAuthToken();
+      const wsUrl = `${proto}//${window.location.host}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        backoffMs = 2000;
+        if (hasConnectedOnce) {
+          void resyncAfterReconnect();
+        }
+        hasConnectedOnce = true;
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const parsed = JSON.parse(String(evt.data || '{}')) as {
+            event?: string;
+            data?: Record<string, unknown>;
+          };
+
+          if (parsed.event === 'notification:created' && parsed.data?.notification) {
+            const incoming = parsed.data.notification as AppNotification;
+            setNotifications((prev) =>
+              prev.some((n) => n.id === incoming.id) ? prev : [incoming, ...prev].slice(0, 40)
+            );
+            showToast(incoming);
+            playNotificationChime();
+
+            if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification(incoming.title, {
+                  body: incoming.message,
+                  icon: '/pwa-192x192.png',
+                });
+              } catch {
+                // Ignore browser Notification fallback errors
+              }
+            }
+          } else if (parsed.event === 'ticket:created' && parsed.data?.ticket) {
+            const incoming = parsed.data.ticket as Ticket;
+            setTickets((prev) => (prev.some((t) => t.id === incoming.id) ? prev : [incoming, ...prev]));
+          } else if (parsed.event === 'ticket:updated' && parsed.data?.ticket) {
+            const incoming = parsed.data.ticket as Ticket;
+            setTickets((prev) =>
+              prev.some((t) => t.id === incoming.id)
+                ? prev.map((t) => (t.id === incoming.id ? incoming : t))
+                : [incoming, ...prev]
+            );
+          } else if (parsed.event === 'ticket:deleted' && typeof parsed.data?.id === 'string') {
+            const deletedId = parsed.data.id;
+            setTickets((prev) => prev.filter((t) => t.id !== deletedId));
+          }
+        } catch {
+          // Ignore malformed WS payloads
+        }
+      };
+
+      ws.onclose = () => {
+        if (disposed) return;
+        reconnectTimer = window.setTimeout(() => {
+          backoffMs = Math.min(15000, backoffMs * 2);
+          connect();
+        }, backoffMs);
+      };
+
+      ws.onerror = () => {
+        ws?.close();
+      };
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+      ws?.close();
+    };
+  }, [currentUser?.id]);
 
   useEffect(() => {
     (async () => {
@@ -179,8 +329,28 @@ export default function App() {
       setDevices([]);
       setTickets([]);
       setVisits([]);
+      setNotifications([]);
+      setLiveToast(null);
+      setFocusedTicketId(null);
       setMobileMenuOpen(false);
     }
+  };
+
+  const handleClickNotification = async (notif: AppNotification) => {
+    if (!notif.isRead) {
+      setNotifications((prev) => prev.map((n) => (n.id === notif.id ? { ...n, isRead: true } : n)));
+      void apiFetch(`/api/notifications/${notif.id}/read`, { method: 'PATCH' }).catch(() => {});
+    }
+    if (liveToast?.id === notif.id) setLiveToast(null);
+    if (notif.ticketId) {
+      setFocusedTicketId(notif.ticketId);
+      setCurrentTab('ticketing');
+    }
+  };
+
+  const handleMarkAllNotificationsRead = async () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    void apiFetch('/api/notifications/read-all', { method: 'POST' }).catch(() => {});
   };
 
   if (bootLoading) {
@@ -241,9 +411,47 @@ export default function App() {
           setSearchTerm={setSearchTerm}
           alertDevices={alertDevices}
           openTickets={openTickets}
+          notifications={notifications}
+          onClickNotification={handleClickNotification}
+          onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
           onJumpToTab={setCurrentTab}
         />
+
+        {liveToast && (
+          <div className="fixed top-16 sm:top-20 right-3 left-3 sm:left-auto sm:right-6 z-50 sm:w-96 rounded-2xl bg-slate-900 dark:bg-slate-800 text-white border border-blue-500/60 shadow-2xl p-3.5 flex items-start gap-3">
+            <div className="w-8 h-8 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center shrink-0 mt-0.5">
+              <BellRing className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1 text-xs">
+              <p className="font-bold text-white truncate">{liveToast.title}</p>
+              <p className="text-slate-300 mt-0.5 line-clamp-2 leading-relaxed">{liveToast.message}</p>
+              <div className="flex items-center gap-2 mt-2">
+                {liveToast.ticketId && (
+                  <button
+                    onClick={() => handleClickNotification(liveToast)}
+                    className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold text-[11px] transition"
+                  >
+                    Buka Tugas
+                  </button>
+                )}
+                <button
+                  onClick={() => setLiveToast(null)}
+                  className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-[11px]"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => setLiveToast(null)}
+              className="text-slate-400 hover:text-white shrink-0"
+              aria-label="Tutup notifikasi"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
           {currentTab === 'dashboard' && (
@@ -288,11 +496,13 @@ export default function App() {
               users={users}
               devices={devices}
               globalSearch={searchTerm}
-              onCreated={(tkt) => setTickets((prev) => [tkt, ...prev])}
+              onCreated={(tkt) => setTickets((prev) => (prev.some((t) => t.id === tkt.id) ? prev : [tkt, ...prev]))}
               onUpdated={(tkt) => setTickets((prev) => prev.map((t) => (t.id === tkt.id ? tkt : t)))}
               onDeleted={(id) => setTickets((prev) => prev.filter((t) => t.id !== id))}
               isCreateModalOpen={isCreateTicketModalOpen}
               setIsCreateModalOpen={setIsCreateTicketModalOpen}
+              focusedTicketId={focusedTicketId}
+              onClearFocusedTicket={() => setFocusedTicketId(null)}
             />
           )}
 

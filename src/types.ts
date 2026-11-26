@@ -126,3 +126,17 @@ export interface FieldVisitReport {
   costRp: number;
   createdAt?: string;
 }
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  type: 'task_assigned' | 'ticket_comment';
+  title: string;
+  message: string;
+  ticketId: string;
+  ticketCode: string;
+  assignedByName: string;
+  isRead: boolean;
+  createdAt: string;
+}
+

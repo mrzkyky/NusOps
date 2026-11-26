@@ -9,6 +9,7 @@ import net from 'node:net';
 import dns from 'node:dns/promises';
 import http from 'node:http';
 import nodemailer from 'nodemailer';
+import { WebSocketServer, WebSocket } from 'ws';
 
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -134,6 +135,22 @@ db.exec(`
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    ticket_id TEXT NOT NULL DEFAULT '',
+    ticket_code TEXT NOT NULL DEFAULT '',
+    assigned_by_name TEXT NOT NULL DEFAULT '',
+    is_read INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
 `);
 
 // Safe migration for existing databases
@@ -375,6 +392,84 @@ async function sendVerificationEmail(to: string, name: string, code: string): Pr
   return sendOtpEmail(to, name, code, 'verify');
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function sendTaskAssignmentEmail(params: {
+  to: string;
+  assigneeName: string;
+  assignerName: string;
+  assignerRole: string;
+  isReassign?: boolean;
+  ticket: {
+    code: string;
+    title: string;
+    category: string;
+    priority: string;
+    branchUnit: string;
+    description: string;
+  };
+}): Promise<{ sent: boolean; error?: string }> {
+  if (!isSmtpConfigured()) {
+    return { sent: false };
+  }
+
+  const actionLabel = params.isReassign ? 'Penugasan Ulang Tiket' : 'Penugasan Tugas Baru';
+  const subject = `[NusantaraOps] ${actionLabel}: ${params.ticket.code} - ${params.ticket.title}`;
+  const appUrl = (process.env.APP_URL || '').trim();
+  const safeUrl = /^https?:\/\//i.test(appUrl) ? appUrl : '';
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: Number(process.env.SMTP_PORT) === 465,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: params.to,
+      subject,
+      html: `
+        <div style="font-family: sans-serif; max-width: 540px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 14px; background: #ffffff;">
+          <p style="margin: 0 0 6px; font-size: 12px; font-weight: 700; color: #2563eb; text-transform: uppercase; letter-spacing: 0.04em;">NusantaraOps Enterprise</p>
+          <h2 style="margin: 0 0 12px; color: #0f172a; font-size: 18px;">${actionLabel}: ${escapeHtml(params.ticket.code)}</h2>
+          <p style="color: #475569; font-size: 14px; line-height: 1.5;">
+            Halo <strong>${escapeHtml(params.assigneeName)}</strong>, Anda baru saja ditugaskan oleh <strong>${escapeHtml(params.assignerName)}</strong> (${escapeHtml(params.assignerRole)}).
+          </p>
+          <div style="margin: 16px 0; padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 13px; color: #334155;">
+            <p style="margin: 0 0 6px;"><strong>Judul:</strong> ${escapeHtml(params.ticket.title)}</p>
+            <p style="margin: 0 0 6px;"><strong>Prioritas:</strong> ${escapeHtml(params.ticket.priority)} &middot; <strong>Kategori:</strong> ${escapeHtml(params.ticket.category)}</p>
+            <p style="margin: 0 0 6px;"><strong>Cabang / Unit:</strong> ${escapeHtml(params.ticket.branchUnit)}</p>
+            <p style="margin: 8px 0 0; color: #475569;"><strong>Deskripsi:</strong><br/>${escapeHtml(params.ticket.description).replace(/\n/g, '<br/>')}</p>
+          </div>
+          ${
+            safeUrl
+              ? `<p style="margin: 18px 0 0;"><a href="${escapeHtml(safeUrl)}" style="display: inline-block; padding: 10px 18px; background: #2563eb; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 13px;">Buka NusantaraOps</a></p>`
+              : ''
+          }
+          <p style="color: #94a3b8; font-size: 11px; margin-top: 18px;">Notifikasi otomatis dari sistem tiketing & operasional NusantaraOps.</p>
+        </div>
+      `,
+    });
+    return { sent: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'SMTP error';
+    console.warn('[TaskEmail] Gagal mengirim email penugasan:', message);
+    return { sent: false, error: message };
+  }
+}
+
 // SSRF Protection for Network Probes
 function isBlockedAddress(ip: string): boolean {
   if (ip === '::1' || ip === '::' || ip.startsWith('fe80:') || ip.startsWith('fc') || ip.startsWith('fd')) {
@@ -551,12 +646,7 @@ interface AuthRequest extends Request {
   user?: SafeUser;
 }
 
-function getAuthenticatedSession(req: Request): { user: SafeUser; expiresAt: number } | null {
-  const cookies = parseCookies(req.headers.cookie);
-  const bearer = req.headers.authorization?.startsWith('Bearer ')
-    ? req.headers.authorization.slice(7).trim()
-    : '';
-  const rawToken = cookies[SESSION_COOKIE] || bearer;
+function verifyRawSessionToken(rawToken?: string): { user: SafeUser; expiresAt: number } | null {
   if (!rawToken) return null;
 
   const jwtPayload = verifyJwtToken(rawToken);
@@ -581,8 +671,151 @@ function getAuthenticatedSession(req: Request): { user: SafeUser; expiresAt: num
   };
 }
 
+function getAuthenticatedSession(req: Request): { user: SafeUser; expiresAt: number } | null {
+  const cookies = parseCookies(req.headers.cookie);
+  const bearer = req.headers.authorization?.startsWith('Bearer ')
+    ? req.headers.authorization.slice(7).trim()
+    : '';
+  const rawToken = cookies[SESSION_COOKIE] || bearer;
+  return verifyRawSessionToken(rawToken);
+}
+
 function getAuthenticatedUser(req: Request): SafeUser | null {
   return getAuthenticatedSession(req)?.user || null;
+}
+
+// --- REAL-TIME WEBSOCKET HUB ---
+const wsClientsByUser = new Map<string, Set<WebSocket>>();
+
+function addWsClient(userId: string, ws: WebSocket) {
+  let set = wsClientsByUser.get(userId);
+  if (!set) {
+    set = new Set<WebSocket>();
+    wsClientsByUser.set(userId, set);
+  }
+  set.add(ws);
+}
+
+function removeWsClient(userId: string, ws: WebSocket) {
+  const set = wsClientsByUser.get(userId);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) {
+    wsClientsByUser.delete(userId);
+  }
+}
+
+function sendWsToUser(userId: string, event: string, data: unknown) {
+  const set = wsClientsByUser.get(userId);
+  if (!set || set.size === 0) return;
+  const payload = JSON.stringify({ event, data });
+  for (const client of set) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  }
+}
+
+function broadcastWs(event: string, data: unknown) {
+  const payload = JSON.stringify({ event, data });
+  for (const set of wsClientsByUser.values()) {
+    for (const client of set) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
+  }
+}
+
+function mapNotification(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    type: String(row.type),
+    title: String(row.title),
+    message: String(row.message),
+    ticketId: String(row.ticket_id || ''),
+    ticketCode: String(row.ticket_code || ''),
+    assignedByName: String(row.assigned_by_name || ''),
+    isRead: Boolean(row.is_read),
+    createdAt: String(row.created_at),
+  };
+}
+
+function createAndPushNotification(params: {
+  recipientId: string;
+  type: 'task_assigned' | 'ticket_comment';
+  title: string;
+  message: string;
+  ticketId: string;
+  ticketCode: string;
+  assignedByName: string;
+}) {
+  const id = `ntf-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO notifications (id, user_id, type, title, message, ticket_id, ticket_code, assigned_by_name, is_read, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+  `).run(
+    id,
+    params.recipientId,
+    params.type,
+    params.title,
+    params.message,
+    params.ticketId,
+    params.ticketCode,
+    params.assignedByName,
+    now
+  );
+
+  const created = db.prepare('SELECT * FROM notifications WHERE id = ?').get(id) as Record<string, unknown>;
+  const mapped = mapNotification(created);
+  sendWsToUser(params.recipientId, 'notification:created', { notification: mapped });
+  return mapped;
+}
+
+function dispatchTaskAssignmentAlerts(params: {
+  recipientId: string;
+  assigner: SafeUser;
+  ticket: ReturnType<typeof mapTicket>;
+  isReassign?: boolean;
+}) {
+  const title = params.isReassign
+    ? `Penugasan Ulang: ${params.ticket.code}`
+    : `Tugas Baru: ${params.ticket.code}`;
+  const message = `${params.assigner.name} (${params.assigner.position || params.assigner.role}) menugaskan "${params.ticket.title}" di ${params.ticket.branchUnit} (${params.ticket.priority}).`;
+
+  createAndPushNotification({
+    recipientId: params.recipientId,
+    type: 'task_assigned',
+    title,
+    message,
+    ticketId: params.ticket.id,
+    ticketCode: params.ticket.code,
+    assignedByName: params.assigner.name,
+  });
+
+  const recipient = db
+    .prepare('SELECT email, name, is_verified FROM users WHERE id = ?')
+    .get(params.recipientId) as { email: string; name: string; is_verified: number } | undefined;
+
+  if (recipient && recipient.is_verified && recipient.email) {
+    void sendTaskAssignmentEmail({
+      to: recipient.email,
+      assigneeName: recipient.name,
+      assignerName: params.assigner.name,
+      assignerRole: params.assigner.position || params.assigner.role,
+      isReassign: params.isReassign,
+      ticket: {
+        code: params.ticket.code,
+        title: params.ticket.title,
+        category: params.ticket.category,
+        priority: params.ticket.priority,
+        branchUnit: params.ticket.branchUnit,
+        description: params.ticket.description,
+      },
+    });
+  }
 }
 
 function requireCsrfCheck(req: Request, res: Response, next: NextFunction) {
@@ -1297,6 +1530,32 @@ function mapTicket(row: Record<string, unknown>) {
   };
 }
 
+// --- NOTIFICATIONS ---
+app.get('/api/notifications', requireAuth, (req: AuthRequest, res: Response) => {
+  const rows = db
+    .prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 40')
+    .all(req.user!.id) as Record<string, unknown>[];
+  const notifications = rows.map(mapNotification);
+  const unreadCount = notifications.filter((n) => !n.isRead).length;
+  res.json({ notifications, unreadCount });
+});
+
+app.patch('/api/notifications/:id/read', requireAuth, (req: AuthRequest, res: Response) => {
+  const info = db
+    .prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?')
+    .run(req.params.id, req.user!.id);
+  if (info.changes === 0) {
+    res.status(404).json({ error: 'Notifikasi tidak ditemukan.' });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/notifications/read-all', requireAuth, (req: AuthRequest, res: Response) => {
+  db.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0').run(req.user!.id);
+  res.json({ ok: true });
+});
+
 app.get('/api/tickets', requireAuth, (_req: AuthRequest, res: Response) => {
   const rows = db.prepare('SELECT * FROM tickets ORDER BY updated_at DESC').all() as Record<string, unknown>[];
   res.json({ tickets: rows.map(mapTicket) });
@@ -1350,7 +1609,19 @@ app.post('/api/tickets', requireAuth, (req: AuthRequest, res: Response) => {
   );
 
   const created = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as Record<string, unknown>;
-  res.status(201).json({ ticket: mapTicket(created) });
+  const mappedTicket = mapTicket(created);
+  broadcastWs('ticket:created', { ticket: mappedTicket });
+
+  if (safeAssignedId) {
+    dispatchTaskAssignmentAlerts({
+      recipientId: safeAssignedId,
+      assigner: req.user!,
+      ticket: mappedTicket,
+      isReassign: false,
+    });
+  }
+
+  res.status(201).json({ ticket: mappedTicket });
 });
 
 app.patch('/api/tickets/:id', requireAuth, (req: AuthRequest, res: Response) => {
@@ -1418,7 +1689,19 @@ app.patch('/api/tickets/:id', requireAuth, (req: AuthRequest, res: Response) => 
   );
 
   const updated = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id) as Record<string, unknown>;
-  res.json({ ticket: mapTicket(updated) });
+  const mappedTicket = mapTicket(updated);
+  broadcastWs('ticket:updated', { ticket: mappedTicket });
+
+  if (nextAssignedId && nextAssignedId !== String(existing.assigned_to_id || '')) {
+    dispatchTaskAssignmentAlerts({
+      recipientId: nextAssignedId,
+      assigner: req.user!,
+      ticket: mappedTicket,
+      isReassign: Boolean(existing.assigned_to_id),
+    });
+  }
+
+  res.json({ ticket: mappedTicket });
 });
 
 app.delete('/api/tickets/:id', requireAuth, (req: AuthRequest, res: Response) => {
@@ -1431,6 +1714,7 @@ app.delete('/api/tickets/:id', requireAuth, (req: AuthRequest, res: Response) =>
     res.status(404).json({ error: 'Tiket tidak ditemukan.' });
     return;
   }
+  broadcastWs('ticket:deleted', { id: req.params.id });
   res.json({ ok: true });
 });
 
@@ -1495,7 +1779,22 @@ app.post('/api/tickets/:id/comments', requireAuth, (req: AuthRequest, res: Respo
   }
 
   const updated = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id) as Record<string, unknown>;
-  res.status(201).json({ ticket: mapTicket(updated) });
+  const mappedTicket = mapTicket(updated);
+  broadcastWs('ticket:updated', { ticket: mappedTicket });
+
+  if (mappedTicket.assignedToId && mappedTicket.assignedToId !== req.user!.id) {
+    createAndPushNotification({
+      recipientId: mappedTicket.assignedToId,
+      type: 'ticket_comment',
+      title: `Update Tiket ${mappedTicket.code}`,
+      message: `${req.user!.name} mengirim update pada "${mappedTicket.title}": ${(cleanMessage || 'Lampiran bukti baru').slice(0, 110)}`,
+      ticketId: mappedTicket.id,
+      ticketCode: mappedTicket.code,
+      assignedByName: req.user!.name,
+    });
+  }
+
+  res.status(201).json({ ticket: mappedTicket });
 });
 
 // --- FIELD VISITS & DAILY REPORTS ---
@@ -1774,12 +2073,68 @@ export { ErrorOverlay, createHotContext, injectQuery, removeStyle, updateStyle }
     });
   }
 
+  const wss = new WebSocketServer({ noServer: true });
+  const heartbeatInterval = setInterval(() => {
+    for (const set of wsClientsByUser.values()) {
+      for (const ws of set) {
+        const flagged = ws as WebSocket & { isAlive?: boolean };
+        if (flagged.isAlive === false) {
+          flagged.terminate();
+          continue;
+        }
+        flagged.isAlive = false;
+        flagged.ping();
+      }
+    }
+  }, 25000);
+  heartbeatInterval.unref();
+
+  httpServer.on('upgrade', (req, socket, head) => {
+    try {
+      const parsedUrl = new URL(req.url || '/', 'http://localhost');
+      if (parsedUrl.pathname !== '/ws') return;
+
+      const cookies = parseCookies(req.headers.cookie);
+      const queryToken = parsedUrl.searchParams.get('token') || '';
+      const rawToken = cookies[SESSION_COOKIE] || queryToken;
+      const authSession = verifyRawSessionToken(rawToken);
+      if (!authSession || !authSession.user.isVerified) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        const flagged = ws as WebSocket & { isAlive?: boolean };
+        flagged.isAlive = true;
+        ws.on('pong', () => {
+          flagged.isAlive = true;
+        });
+
+        const userId = authSession.user.id;
+        addWsClient(userId, ws);
+        ws.send(JSON.stringify({ event: 'ws:connected', data: { userId } }));
+
+        ws.on('close', () => {
+          removeWsClient(userId, ws);
+        });
+        ws.on('error', () => {
+          removeWsClient(userId, ws);
+        });
+      });
+    } catch {
+      socket.destroy();
+    }
+  });
+
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`NusantaraOps server running on http://0.0.0.0:${PORT}`);
   });
 
   const shutdown = (signal: string) => {
     console.log(`Received ${signal}, closing server & SQLite cleanly...`);
+    clearInterval(heartbeatInterval);
+    wss.close();
     httpServer.close(() => {
       try {
         db.pragma('wal_checkpoint(TRUNCATE)');

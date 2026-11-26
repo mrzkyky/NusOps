@@ -33,6 +33,8 @@ interface TicketingViewProps {
   onDeleted: (id: string) => void;
   isCreateModalOpen: boolean;
   setIsCreateModalOpen: (open: boolean) => void;
+  focusedTicketId?: string | null;
+  onClearFocusedTicket?: () => void;
 }
 
 function formatFileSize(bytes: number): string {
@@ -52,6 +54,8 @@ export const TicketingView: React.FC<TicketingViewProps> = ({
   onDeleted,
   isCreateModalOpen,
   setIsCreateModalOpen,
+  focusedTicketId,
+  onClearFocusedTicket,
 }) => {
   const canManageTickets = canCreateOrManageTickets(currentUser.role);
   const [statusFilter, setStatusFilter] = useState<string>('All');
@@ -104,6 +108,15 @@ export const TicketingView: React.FC<TicketingViewProps> = ({
     setCommentNextStatus('');
     setCommentError('');
   }, [selectedTicket?.id, selectedTicket?.status]);
+
+  useEffect(() => {
+    if (!focusedTicketId) return;
+    if (tickets.some((t) => t.id === focusedTicketId)) {
+      setSelectedTicketId(focusedTicketId);
+      setMobileShowDetail(true);
+    }
+    onClearFocusedTicket?.();
+  }, [focusedTicketId, tickets, onClearFocusedTicket]);
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -789,9 +802,16 @@ export const TicketingView: React.FC<TicketingViewProps> = ({
                   >
                     <option value="">Belum Ditugaskan</option>
                     {users.map((u) => (
-                      <option key={u.id} value={u.id}>{u.name}</option>
+                      <option key={u.id} value={u.id}>
+                        {u.name} ({u.position || u.role})
+                      </option>
                     ))}
                   </select>
+                  {assignedToId && (
+                    <p className="text-[11px] text-blue-600 dark:text-blue-400 mt-1">
+                      Notifikasi real-time & email otomatis dikirim ke user terpilih.
+                    </p>
+                  )}
                 </div>
               </div>
 
