@@ -110,15 +110,6 @@ export default function App() {
     if (currentTab === 'audit' && currentUser.role !== 'Super Admin') {
       setCurrentTab('dashboard');
     }
-    if (
-      currentTab === 'accounts' &&
-      currentUser.role !== 'Super Admin' &&
-      currentUser.role !== 'Manager' &&
-      currentUser.role !== 'SPV' &&
-      currentUser.role !== 'Regional Manager'
-    ) {
-      setCurrentTab('dashboard');
-    }
   }, [currentTab, currentUser]);
 
   useEffect(() => {

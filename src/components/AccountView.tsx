@@ -643,94 +643,96 @@ export const AccountView: React.FC<AccountViewProps> = ({
           </div>
 
           {/* Team Members */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Daftar Akun Tim ({users.length})</h3>
-                <p className="text-xs text-slate-500">Pembuatan akun baru memerlukan verifikasi OTP email.</p>
+          {['Super Admin', 'Manager', 'SPV', 'Regional Manager'].includes(currentUser.role) && (
+            <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Daftar Akun Tim ({users.length})</h3>
+                  <p className="text-xs text-slate-500">Pembuatan akun baru memerlukan verifikasi OTP email.</p>
+                </div>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="min-h-[40px] flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Tambah Akun</span>
+                </button>
               </div>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="min-h-[40px] flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Tambah Akun</span>
-              </button>
-            </div>
 
-            {teamNotice && <p className="text-xs font-medium text-rose-600 dark:text-rose-400">{teamNotice}</p>}
+              {teamNotice && <p className="text-xs font-medium text-rose-600 dark:text-rose-400">{teamNotice}</p>}
 
-            <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {users.map((usr) => (
-                <div key={usr.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
-                  <div className="flex items-center gap-3 min-w-0">
-                    {usr.avatarUrl ? (
-                      <img src={usr.avatarUrl} alt={usr.name} className="w-9 h-9 rounded-xl object-cover shrink-0" />
-                    ) : (
-                      <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center font-bold text-slate-700 dark:text-slate-300 shrink-0">
-                        {usr.name.slice(0, 2).toUpperCase()}
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {users.map((usr) => (
+                  <div key={usr.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {usr.avatarUrl ? (
+                        <img src={usr.avatarUrl} alt={usr.name} className="w-9 h-9 rounded-xl object-cover shrink-0" />
+                      ) : (
+                        <div className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center font-bold text-slate-700 dark:text-slate-300 shrink-0">
+                          {usr.name.slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="font-bold text-slate-900 dark:text-white truncate">
+                          {usr.name}
+                          {usr.position && (
+                            <span className="ml-1.5 font-medium text-blue-600 dark:text-blue-400">
+                              · {usr.position}
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-slate-500 truncate">{usr.email} · {usr.branch}</p>
                       </div>
-                    )}
-                    <div className="min-w-0">
-                      <p className="font-bold text-slate-900 dark:text-white truncate">
-                        {usr.name}
-                        {usr.position && (
-                          <span className="ml-1.5 font-medium text-blue-600 dark:text-blue-400">
-                            · {usr.position}
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-slate-500 truncate">{usr.email} · {usr.branch}</p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {usr.isVerified ? (
+                        <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Verified</span>
+                      ) : (
+                        <button
+                          onClick={() => handleResendOtp(usr.email)}
+                          className="px-2.5 py-1 rounded-lg bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[11px] font-semibold"
+                        >
+                          Verifikasi OTP
+                        </button>
+                      )}
+
+                      {currentUser.role === 'Super Admin' ? (
+                        <>
+                          <select
+                            value={usr.role}
+                            onChange={(e) => handleChangeRole(usr.id, e.target.value as UserRole)}
+                            className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-semibold"
+                          >
+                            <option value="Super Admin">Super Admin</option>
+                            <option value="Manager">Manager</option>
+                            <option value="SPV">SPV</option>
+                            <option value="IT Lead">IT Lead</option>
+                            <option value="Staff">Staff</option>
+                            {usr.role === 'Field Tech' && <option value="Field Tech">Field Tech (Legacy)</option>}
+                            {usr.role === 'Regional Manager' && <option value="Regional Manager">Regional Manager (Legacy)</option>}
+                          </select>
+                          {usr.id !== currentUser.id && (
+                            <button
+                              onClick={() => setConfirmDeleteUserId(usr.id)}
+                              className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50"
+                              title="Hapus Akun"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                          {normalizeRoleLabel(usr.role)}
+                        </span>
+                      )}
                     </div>
                   </div>
-
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    {usr.isVerified ? (
-                      <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">Verified</span>
-                    ) : (
-                      <button
-                        onClick={() => handleResendOtp(usr.email)}
-                        className="px-2.5 py-1 rounded-lg bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[11px] font-semibold"
-                      >
-                        Verifikasi OTP
-                      </button>
-                    )}
-
-                    {currentUser.role === 'Super Admin' ? (
-                      <>
-                        <select
-                          value={usr.role}
-                          onChange={(e) => handleChangeRole(usr.id, e.target.value as UserRole)}
-                          className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-semibold"
-                        >
-                          <option value="Super Admin">Super Admin</option>
-                          <option value="Manager">Manager</option>
-                          <option value="SPV">SPV</option>
-                          <option value="IT Lead">IT Lead</option>
-                          <option value="Staff">Staff</option>
-                          {usr.role === 'Field Tech' && <option value="Field Tech">Field Tech (Legacy)</option>}
-                          {usr.role === 'Regional Manager' && <option value="Regional Manager">Regional Manager (Legacy)</option>}
-                        </select>
-                        {usr.id !== currentUser.id && (
-                          <button
-                            onClick={() => setConfirmDeleteUserId(usr.id)}
-                            className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50"
-                            title="Hapus Akun"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-                        {normalizeRoleLabel(usr.role)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 

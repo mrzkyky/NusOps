@@ -43,9 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'ticketing', label: 'Tiketing Insiden', icon: TicketCheck },
     { id: 'visits', label: 'Kunjungan & Daily Report', icon: ClipboardCheck },
     { id: 'maintenance', label: 'Maintenance Rutin', icon: Clock },
-    ...(currentUser.role === 'Super Admin' || currentUser.role === 'Manager' || currentUser.role === 'SPV' || currentUser.role === 'Regional Manager'
-      ? [{ id: 'accounts', label: 'Akun & Tim', icon: Users }]
-      : []),
+    { id: 'accounts', label: 'Profil & Akun', icon: Users },
     ...(currentUser.role === 'Super Admin'
       ? [{ id: 'audit', label: 'Audit Log & Sistem', icon: ShieldCheck }]
       : []),
