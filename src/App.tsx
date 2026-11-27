@@ -11,6 +11,7 @@ import { AccountView } from './components/AccountView';
 import { MasterPromptView } from './components/MasterPromptView';
 import { RegionManagerModal } from './components/RegionManagerModal';
 import { BranchManagerModal } from './components/BranchManagerModal';
+import { MaintenanceView } from './components/MaintenanceView';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { AuthGate } from './components/AuthGate';
 import { apiFetch, getAuthToken, getSessionExpiresAt, setAuthToken, setUnauthorizedHandler } from './lib/api';
@@ -24,6 +25,7 @@ import {
   AppNotification,
   RegionItem,
   BranchItem,
+  MaintenanceSchedule,
 } from './types';
 
 function playNotificationChime() {
@@ -85,6 +87,7 @@ export default function App() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [regions, setRegions] = useState<RegionItem[]>([]);
   const [branches, setBranches] = useState<BranchItem[]>([]);
+  const [schedules, setSchedules] = useState<MaintenanceSchedule[]>([]);
   const [devices, setDevices] = useState<InfrastructureDevice[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [visits, setVisits] = useState<FieldVisitReport[]>([]);
@@ -112,10 +115,11 @@ export default function App() {
   }, [darkMode]);
 
   const loadWorkspaceData = useCallback(async () => {
-    const [uRes, rRes, bRes, dRes, tRes, vRes, nRes] = await Promise.all([
+    const [uRes, rRes, bRes, sRes, dRes, tRes, vRes, nRes] = await Promise.all([
       apiFetch<{ users: UserProfile[] }>('/api/users'),
       apiFetch<{ regions: RegionItem[] }>('/api/regions'),
       apiFetch<{ branches: BranchItem[] }>('/api/branches'),
+      apiFetch<{ schedules: MaintenanceSchedule[] }>('/api/schedules'),
       apiFetch<{ devices: InfrastructureDevice[] }>('/api/devices'),
       apiFetch<{ tickets: Ticket[] }>('/api/tickets'),
       apiFetch<{ visits: FieldVisitReport[] }>('/api/visits'),
@@ -124,6 +128,7 @@ export default function App() {
     setUsers(uRes.users);
     setRegions(rRes.regions);
     setBranches(bRes.branches);
+    setSchedules(sRes.schedules);
     setDevices(dRes.devices);
     setTickets(tRes.tickets);
     setVisits(vRes.visits);
@@ -211,11 +216,12 @@ export default function App() {
 
     const resyncAfterReconnect = async () => {
       try {
-        const [nRes, tRes, rRes, bRes, dRes, vRes] = await Promise.all([
+        const [nRes, tRes, rRes, bRes, sRes, dRes, vRes] = await Promise.all([
           apiFetch<{ notifications: AppNotification[] }>('/api/notifications'),
           apiFetch<{ tickets: Ticket[] }>('/api/tickets'),
           apiFetch<{ regions: RegionItem[] }>('/api/regions'),
           apiFetch<{ branches: BranchItem[] }>('/api/branches'),
+          apiFetch<{ schedules: MaintenanceSchedule[] }>('/api/schedules'),
           apiFetch<{ devices: InfrastructureDevice[] }>('/api/devices'),
           apiFetch<{ visits: FieldVisitReport[] }>('/api/visits'),
         ]);
@@ -224,6 +230,7 @@ export default function App() {
           setTickets(tRes.tickets);
           setRegions(rRes.regions);
           setBranches(bRes.branches);
+          setSchedules(sRes.schedules);
           setDevices(dRes.devices);
           setVisits(vRes.visits);
         }
@@ -347,6 +354,15 @@ export default function App() {
           } else if (parsed.event === 'branch:deleted' && typeof parsed.data?.id === 'string') {
             const deletedId = parsed.data.id;
             setBranches((prev) => prev.filter((b) => b.id !== deletedId));
+          } else if (parsed.event === 'schedule:created' && parsed.data?.schedule) {
+            const incoming = parsed.data.schedule as MaintenanceSchedule;
+            setSchedules((prev) => (prev.some((s) => s.id === incoming.id) ? prev : [incoming, ...prev]));
+          } else if (parsed.event === 'schedule:updated' && parsed.data?.schedule) {
+            const incoming = parsed.data.schedule as MaintenanceSchedule;
+            setSchedules((prev) => prev.map((s) => (s.id === incoming.id ? incoming : s)));
+          } else if (parsed.event === 'schedule:deleted' && typeof parsed.data?.id === 'string') {
+            const deletedId = parsed.data.id;
+            setSchedules((prev) => prev.filter((s) => s.id !== deletedId));
           }
         } catch {
           // Ignore malformed WS payloads
@@ -689,6 +705,35 @@ export default function App() {
               onClearFocusedVisit={() => setFocusedVisitId(null)}
               onOpenRegionManager={() => setIsRegionModalOpen(true)}
               onCreateTicketFromVisit={handleCreateTicketFromVisit}
+            />
+          )}
+
+          {currentTab === 'maintenance' && (
+            <MaintenanceView
+              currentUser={currentUser}
+              schedules={schedules}
+              regions={regions}
+              branches={branches}
+              users={users}
+              onCreated={(sched) => setSchedules((prev) => (prev.some((s) => s.id === sched.id) ? prev : [sched, ...prev]))}
+              onUpdated={(sched) => setSchedules((prev) => prev.map((s) => (s.id === sched.id ? sched : s)))}
+              onDeleted={(id) => setSchedules((prev) => prev.filter((s) => s.id !== id))}
+              onCreateVisitFromSchedule={(_sched) => {
+                setCurrentTab('visits');
+                setIsCreateVisitModalOpen(true);
+              }}
+              onCreateTicketFromSchedule={(sched) => {
+                setTicketDraftPrefill({
+                  title: `Preventive Maintenance: ${sched.title} (${sched.branchUnit})`,
+                  category: mapVisitCategoryToTicketCategory(sched.category),
+                  priority: 'Medium',
+                  branchUnit: sched.branchUnit,
+                  deviceId: '',
+                  description: `Jadwal maintenance rutin "${sched.title}" (${sched.category}) untuk cabang ${sched.branchUnit} (Wilayah ${sched.region}).`,
+                });
+                setCurrentTab('ticketing');
+                setIsCreateTicketModalOpen(true);
+              }}
             />
           )}
 
