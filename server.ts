@@ -253,6 +253,46 @@ function hashPassword(password: string): string {
   return `${salt}:${derived}`;
 }
 
+// Auto-seed default Super Admin if users table is empty (ensures data survives publish/redeploy resets)
+const userCount = (db.prepare('SELECT COUNT(*) as cnt FROM users').get() as { cnt: number }).cnt;
+if (userCount === 0) {
+  const adminId = `usr-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO users (id, name, email, password_hash, role, position, branch, phone, avatar_url, is_verified, created_at)
+    VALUES (?, ?, ?, ?, 'Super Admin', ?, ?, ?, '', 1, ?)
+  `).run(
+    adminId,
+    'Super Admin NusantaraOps',
+    'admin@nusantaraops.internal',
+    hashPassword('nusantara123'),
+    'Super Admin Pusat',
+    'Pusat Jakarta',
+    '081234567890',
+    now
+  );
+}
+
+// Auto-seed starter branches if branches table is empty
+const branchCount = (db.prepare('SELECT COUNT(*) as cnt FROM branches').get() as { cnt: number }).cnt;
+if (branchCount === 0) {
+  const starterBranches = [
+    { regionName: 'Jabodetabek', name: 'Kantor Pusat Sudirman', code: 'JKT-01', address: 'Jl. Jend. Sudirman Kav. 52, Jakarta Selatan', picName: 'Budi Santoso' },
+    { regionName: 'Jabodetabek', name: 'Data Center Cibitung', code: 'JKT-02', address: 'Kawasan Industri MM2100, Cibitung', picName: 'Ahmad Fauzi' },
+    { regionName: 'Jawa Barat', name: 'Cabang Bandung Asia Afrika', code: 'JBR-01', address: 'Jl. Asia Afrika No. 120, Bandung', picName: 'Rian Hidayat' },
+    { regionName: 'Jawa Tengah', name: 'Cabang Semarang Pemuda', code: 'JTG-01', address: 'Jl. Pemuda No. 145, Semarang', picName: 'Dewi Lestari' },
+    { regionName: 'Jawa Timur', name: 'Cabang Surabaya Basuki Rahmat', code: 'JTM-01', address: 'Jl. Basuki Rahmat No. 88, Surabaya', picName: 'Eko Prasetyo' },
+    { regionName: 'Sumatera Utara', name: 'Cabang Medan Gatot Subroto', code: 'SUM-01', address: 'Jl. Gatot Subroto No. 210, Medan', picName: 'Rahmat Siregar' },
+  ];
+  const nowInit = new Date().toISOString();
+  const insertBranch = db.prepare(
+    'INSERT OR IGNORE INTO branches (id, region_name, name, code, address, pic_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const b of starterBranches) {
+    insertBranch.run(`brn-${crypto.randomUUID()}`, b.regionName, b.name, b.code, b.address, b.picName, nowInit);
+  }
+}
+
 function verifyPassword(password: string, stored: string): boolean {
   const parts = stored.split(':');
   if (parts.length !== 2) return false;

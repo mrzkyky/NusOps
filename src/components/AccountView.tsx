@@ -61,11 +61,11 @@ export const AccountView: React.FC<AccountViewProps> = ({
   onPasswordChanged,
   onOpenMasterPrompt,
 }) => {
-  const [name, setName] = useState(currentUser.name);
-  const [position, setPosition] = useState(currentUser.position || '');
-  const [phone, setPhone] = useState(currentUser.phone);
-  const [branch, setBranch] = useState(currentUser.branch);
-  const [avatarUrl, setAvatarUrl] = useState(currentUser.avatarUrl);
+  const [name, setName] = useState(currentUser?.name || '');
+  const [position, setPosition] = useState(currentUser?.position || '');
+  const [phone, setPhone] = useState(currentUser?.phone || '');
+  const [branch, setBranch] = useState(currentUser?.branch || '');
+  const [avatarUrl, setAvatarUrl] = useState(currentUser?.avatarUrl || '');
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileNotice, setProfileNotice] = useState('');
@@ -111,9 +111,9 @@ export const AccountView: React.FC<AccountViewProps> = ({
   const [previewOtp, setPreviewOtp] = useState('');
   const [verifying, setVerifying] = useState(false);
 
-  const initials = currentUser.name
+  const initials = (currentUser?.name || 'User')
     .split(' ')
-    .map((p) => p[0])
+    .map((p) => p[0] || '')
     .slice(0, 2)
     .join('')
     .toUpperCase();
