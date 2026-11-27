@@ -5,7 +5,8 @@ import {
   TicketCheck,
   ClipboardCheck,
   Users,
-  FileCode,
+  ShieldCheck,
+  Clock,
   Sun,
   Moon,
   LogOut,
@@ -41,8 +42,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'infrastructure', label: 'Perangkat & Server', icon: Server },
     { id: 'ticketing', label: 'Tiketing Insiden', icon: TicketCheck },
     { id: 'visits', label: 'Kunjungan & Daily Report', icon: ClipboardCheck },
-    { id: 'accounts', label: 'Akun & Verifikasi Email', icon: Users },
-    { id: 'masterprompt', label: 'Master Prompt & Stack', icon: FileCode },
+    { id: 'maintenance', label: 'Maintenance Rutin', icon: Clock },
+    { id: 'accounts', label: 'Akun & Tim', icon: Users },
+    { id: 'audit', label: 'Audit Log & Sistem', icon: ShieldCheck },
   ];
 
   const handleSelect = (id: string) => {

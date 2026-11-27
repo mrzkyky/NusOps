@@ -29,6 +29,40 @@ export interface RegionItem {
   createdAt?: string;
 }
 
+export interface BranchItem {
+  id: string;
+  regionName: string;
+  name: string;
+  code: string;
+  address: string;
+  picName: string;
+  createdAt?: string;
+}
+
+export interface MaintenanceSchedule {
+  id: string;
+  title: string;
+  category: 'AC Cleaning & Service' | 'Server Rack Audit' | 'UPS Battery Load Test' | 'Network Cable Management' | 'General Infrastructure Check';
+  region: string;
+  branchUnit: string;
+  frequencyDays: number;
+  nextDueDate: string;
+  assignedToId: string;
+  assignedToName: string;
+  status: 'Active' | 'Due' | 'Completed';
+  createdAt?: string;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  userId: string;
+  userName: string;
+  action: string;
+  details: string;
+  ipAddress: string;
+  createdAt: string;
+}
+
 export interface HostMetrics {
   hostname: string;
   platform: string;
@@ -157,7 +191,7 @@ export interface FieldVisitReport {
 export interface AppNotification {
   id: string;
   userId: string;
-  type: 'task_assigned' | 'ticket_comment' | 'device_offline' | 'visit_submitted' | 'visit_reviewed';
+  type: 'task_assigned' | 'ticket_comment' | 'device_offline' | 'visit_submitted' | 'visit_reviewed' | 'maintenance_due';
   title: string;
   message: string;
   ticketId: string;

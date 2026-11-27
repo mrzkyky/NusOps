@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Server,
   Plus,
@@ -16,6 +16,8 @@ import {
   TicketCheck,
   Cpu,
   SlidersHorizontal,
+  Download,
+  Building2,
 } from 'lucide-react';
 import {
   InfrastructureDevice,
@@ -23,6 +25,7 @@ import {
   DeviceProbeLog,
   UserProfile,
   RegionItem,
+  BranchItem,
   HostMetrics,
 } from '../types';
 import { apiFetch, formatRelativeTime, formatDateTime } from '../lib/api';
@@ -32,12 +35,14 @@ interface InfrastructureViewProps {
   currentUser: UserProfile;
   devices: InfrastructureDevice[];
   regions: RegionItem[];
+  branches: BranchItem[];
   globalSearch: string;
   onCreated: (device: InfrastructureDevice) => void;
   onUpdated: (device: InfrastructureDevice) => void;
   onDevicesSynced?: (devices: InfrastructureDevice[]) => void;
   onDeleted: (id: string) => void;
   onOpenRegionManager?: () => void;
+  onOpenBranchManager?: () => void;
   onCreateTicketFromDevice?: (device: InfrastructureDevice) => void;
   isCreateModalOpen: boolean;
   setIsCreateModalOpen: (open: boolean) => void;
@@ -51,26 +56,18 @@ const TYPES: InfrastructureDevice['type'][] = [
   'AC Cooling Unit',
 ];
 
-function formatUptime(seconds: number): string {
-  if (!seconds || seconds < 60) return `${seconds || 0} dtk`;
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}h ${hours}j`;
-  if (hours > 0) return `${hours}j ${mins}m`;
-  return `${mins} mnt`;
-}
-
 export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
   currentUser,
   devices,
   regions,
+  branches,
   globalSearch,
   onCreated,
   onUpdated,
   onDevicesSynced,
   onDeleted,
   onOpenRegionManager,
+  onOpenBranchManager,
   onCreateTicketFromDevice,
   isCreateModalOpen,
   setIsCreateModalOpen,
@@ -120,6 +117,8 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
   const [temperature, setTemperature] = useState('25');
   const [notes, setNotes] = useState('');
 
+  const regionBranches = branches.filter((b) => b.regionName === region);
+
   const fetchHostMetrics = async () => {
     setLoadingHostMetrics(true);
     try {
@@ -153,8 +152,10 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
   const resetForm = () => {
     setName('');
     setType('Server');
-    setRegion(regionNames[0] || 'Jabodetabek');
-    setBranchUnit('');
+    const defaultReg = regionNames[0] || 'Jabodetabek';
+    setRegion(defaultReg);
+    const defBranches = branches.filter((b) => b.regionName === defaultReg);
+    setBranchUnit(defBranches[0]?.name || '');
     setIpAddress('');
     setPort('80');
     setProbeUrl('');
@@ -194,7 +195,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
         name,
         type,
         region,
-        branchUnit,
+        branchUnit: branchUnit || (regionBranches[0]?.name ?? 'Pusat'),
         ipAddress,
         port: Number(port) || 80,
         probeUrl,
@@ -293,6 +294,39 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
     }
   };
 
+  const handleExportCsv = () => {
+    const headers = ['ID', 'Nama Perangkat', 'Tipe', 'Wilayah', 'Unit Cabang', 'IP Address', 'Port', 'Status', 'CPU %', 'RAM %', 'Disk %', 'Suhu (C)', 'Uptime (%)', 'Catatan'];
+    const escapeCell = (val: string | number | null) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+    const rows = filteredDevices.map((d) =>
+      [
+        d.id,
+        d.name,
+        d.type,
+        d.region,
+        d.branchUnit,
+        d.ipAddress,
+        d.port,
+        d.status,
+        d.cpuUsage,
+        d.memoryUsage,
+        d.diskUsage,
+        d.temperature,
+        d.uptimePct,
+        d.notes,
+      ]
+        .map(escapeCell)
+        .join(',')
+    );
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `inventaris-perangkat-nusantaraops-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const modalOpen = isCreateModalOpen || Boolean(editingDevice);
 
   return (
@@ -304,11 +338,20 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
             Monitoring Perangkat & Server
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Cek konektivitas TCP/HTTP nyata (auto-probe tiap 2 menit), hitung uptime riil, dan tarik telemetri JSON endpoint.
+            Cek konektivitas TCP/HTTP nyata, hitung uptime riil, dan ekspor inventaris perangkat ke CSV.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {filteredDevices.length > 0 && (
+            <button
+              onClick={handleExportCsv}
+              className="min-h-[44px] px-3.5 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 hover:bg-slate-50"
+            >
+              <Download className="w-4 h-4" />
+              <span>Export CSV</span>
+            </button>
+          )}
           {devices.length > 0 && (
             <button
               onClick={handleProbeAll}
@@ -344,7 +387,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                 <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">({hostMetrics.platform})</span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Metrik Real-Time Host Server NusantaraOps · Uptime OS {formatUptime(hostMetrics.uptimeSeconds)}
+                Metrik Real-Time Host Server NusantaraOps
               </p>
             </div>
           </div>
@@ -386,7 +429,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
 
       {/* Filters */}
       <div className="p-3 sm:p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="flex-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
             {['All', ...regionNames].map((reg) => (
               <button
@@ -403,17 +446,28 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
             ))}
           </div>
 
-          {canManageRegions && onOpenRegionManager && (
-            <button
-              onClick={onOpenRegionManager}
-              className="min-h-[36px] px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900/60 text-xs font-semibold whitespace-nowrap shrink-0 flex items-center gap-1.5 hover:bg-blue-100 dark:hover:bg-blue-950/70 transition"
-              title="Tambah, ubah, atau hapus wilayah"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Kelola Wilayah</span>
-              <span className="sm:hidden">Wilayah</span>
-            </button>
-          )}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {canManageRegions && onOpenRegionManager && (
+              <button
+                onClick={onOpenRegionManager}
+                className="min-h-[36px] px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900/60 text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 hover:bg-blue-100 transition"
+                title="Kelola Master Wilayah"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span>Wilayah</span>
+              </button>
+            )}
+            {canManageRegions && onOpenBranchManager && (
+              <button
+                onClick={onOpenBranchManager}
+                className="min-h-[36px] px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900/60 text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 hover:bg-indigo-100 transition"
+                title="Kelola Master Cabang"
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>Cabang</span>
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
@@ -534,7 +588,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                 {!isOnline && canCreateTickets && onCreateTicketFromDevice && (
                   <button
                     onClick={() => onCreateTicketFromDevice(device)}
-                    className="w-full min-h-[36px] px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-950/70 text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                    className="w-full min-h-[36px] px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 hover:bg-rose-100 text-xs font-semibold flex items-center justify-center gap-1.5 transition"
                   >
                     <TicketCheck className="w-3.5 h-3.5" />
                     <span>Buat Tiket Insiden dari Perangkat Ini</span>
@@ -551,7 +605,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                   <div className="flex items-center gap-1.5 shrink-0 ml-auto">
                     <button
                       onClick={() => handleOpenLogs(device)}
-                      className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
+                      className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
                       title="Riwayat Probe"
                     >
                       <Clock className="w-3.5 h-3.5" />
@@ -559,8 +613,8 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                     {canEditDevices && (
                       <button
                         onClick={() => openEdit(device)}
-                        className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700"
-                        title="Edit Perangkat & Metrik"
+                        className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+                        title="Edit Perangkat"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
@@ -568,7 +622,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                     {canRemoveDevices && (
                       <button
                         onClick={() => setConfirmDeleteId(device.id)}
-                        className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/50"
+                        className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 text-rose-600 hover:bg-rose-50"
                         title="Hapus Perangkat"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -616,7 +670,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Contoh: SRV-CORE-JKT-01"
-                  className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono focus:outline-none"
+                  className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono"
                 />
               </div>
 
@@ -626,7 +680,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                   <select
                     value={type}
                     onChange={(e) => setType(e.target.value as InfrastructureDevice['type'])}
-                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none"
+                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                   >
                     {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
@@ -639,7 +693,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                       <button
                         type="button"
                         onClick={onOpenRegionManager}
-                        className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                        className="text-[11px] font-semibold text-blue-600 hover:underline"
                       >
                         + Kelola
                       </button>
@@ -648,28 +702,53 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                   <select
                     required
                     value={region}
-                    onChange={(e) => setRegion(e.target.value)}
-                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none"
+                    onChange={(e) => {
+                      const nextReg = e.target.value;
+                      setRegion(nextReg);
+                      const bList = branches.filter((b) => b.regionName === nextReg);
+                      if (bList.length > 0) setBranchUnit(bList[0].name);
+                    }}
+                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                   >
-                    {regionNames.length === 0 ? (
-                      <option value="">Belum ada wilayah</option>
-                    ) : (
-                      regionNames.map((r) => <option key={r} value={r}>{r}</option>)
-                    )}
+                    {regionNames.map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Nama Unit / Cabang</label>
-                <input
-                  type="text"
-                  required
-                  value={branchUnit}
-                  onChange={(e) => setBranchUnit(e.target.value)}
-                  placeholder="Contoh: Cabang Bandung Asia Afrika"
-                  className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-slate-700 dark:text-slate-300">Nama Unit / Cabang Resmi</label>
+                  {canManageRegions && onOpenBranchManager && (
+                    <button
+                      type="button"
+                      onClick={onOpenBranchManager}
+                      className="text-[11px] font-semibold text-blue-600 hover:underline"
+                    >
+                      + Master Cabang
+                    </button>
+                  )}
+                </div>
+                {regionBranches.length > 0 ? (
+                  <select
+                    required
+                    value={branchUnit}
+                    onChange={(e) => setBranchUnit(e.target.value)}
+                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  >
+                    {regionBranches.map((b) => (
+                      <option key={b.id} value={b.name}>{b.name} ({b.code})</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    required
+                    value={branchUnit}
+                    onChange={(e) => setBranchUnit(e.target.value)}
+                    placeholder="Contoh: Cabang Utama Bandung"
+                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
+                  />
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -680,8 +759,8 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                     required
                     value={ipAddress}
                     onChange={(e) => setIpAddress(e.target.value)}
-                    placeholder="Contoh: 103.10.x.x atau host.id"
-                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono focus:outline-none"
+                    placeholder="Contoh: 103.10.x.x"
+                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono"
                   />
                 </div>
                 <div>
@@ -691,25 +770,20 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                     value={port}
                     onChange={(e) => setPort(e.target.value)}
                     placeholder="80"
-                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono focus:outline-none"
+                    className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  URL Health / JSON Telemetry Endpoint (Opsional)
-                </label>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">URL Health Endpoint (Opsional)</label>
                 <input
                   type="url"
                   value={probeUrl}
                   onChange={(e) => setProbeUrl(e.target.value)}
                   placeholder="https://status.unitanda.id/health"
-                  className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono focus:outline-none"
+                  className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white font-mono"
                 />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Jika endpoint mengembalikan JSON (cpuUsage, memoryUsage, diskUsage, temperature), metrik kartu diperbarui otomatis tiap probe.
-                </p>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
@@ -749,18 +823,18 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                   type="text"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Contoh: AC server ruang lt 2 / jadwal service bulanan"
-                  className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white focus:outline-none"
+                  placeholder="Contoh: AC server ruang lt 2"
+                  className="w-full min-h-[42px] px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white"
                 />
               </div>
 
-              {formError && <p className="text-xs font-medium text-rose-600 dark:text-rose-400">{formError}</p>}
+              {formError && <p className="text-xs font-medium text-rose-600">{formError}</p>}
 
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => { setIsCreateModalOpen(false); setEditingDevice(null); }}
-                  className="min-h-[44px] px-4 py-2 font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
+                  className="min-h-[44px] px-4 py-2 font-semibold text-slate-600 dark:text-slate-300 rounded-xl"
                 >
                   Batal
                 </button>
@@ -785,7 +859,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white font-mono">{logsDevice.name}</h3>
-                <p className="text-xs text-slate-500">Riwayat pengecekan konektivitas · Uptime {logsDevice.uptimePct}%</p>
+                <p className="text-xs text-slate-500">Riwayat probe · Uptime {logsDevice.uptimePct}%</p>
               </div>
               <button onClick={() => setLogsDevice(null)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
@@ -793,13 +867,13 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
             </div>
 
             {deviceLogs.length === 0 ? (
-              <p className="text-xs text-slate-500 py-6 text-center">Belum ada riwayat probe. Tekan "Cek Live" untuk menjalankan probe pertama.</p>
+              <p className="text-xs text-slate-500 py-6 text-center">Belum ada riwayat probe.</p>
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
                 {deviceLogs.map((log) => (
                   <div key={log.id} className="py-2.5 space-y-0.5">
                     <div className="flex items-center justify-between">
-                      <span className={`font-bold ${log.status === 'online' ? 'text-emerald-600' : log.status === 'warning' ? 'text-amber-600' : 'text-rose-600'}`}>
+                      <span className={`font-bold ${log.status === 'online' ? 'text-emerald-600' : 'text-rose-600'}`}>
                         {log.status.toUpperCase()}
                       </span>
                       <span className="text-[11px] text-slate-400 font-mono">{formatDateTime(log.checked_at)}</span>
@@ -813,25 +887,16 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
         </div>
       )}
 
-      {/* Delete Confirmation */}
       {confirmDeleteId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
           <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-slate-900 p-6 border border-slate-200 dark:border-slate-800 space-y-4">
             <h3 className="text-base font-bold text-slate-900 dark:text-white">Hapus Perangkat?</h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Data perangkat beserta riwayat pengecekannya akan dihapus permanen dari database.
-            </p>
+            <p className="text-xs text-slate-500">Data perangkat beserta riwayat akan dihapus permanen.</p>
             <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setConfirmDeleteId(null)}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200"
-              >
+              <button onClick={() => setConfirmDeleteId(null)} className="min-h-[40px] px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold">
                 Batal
               </button>
-              <button
-                onClick={() => handleDelete(confirmDeleteId)}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-semibold text-white"
-              >
+              <button onClick={() => handleDelete(confirmDeleteId)} className="min-h-[40px] px-4 py-2 rounded-xl bg-rose-600 text-xs font-semibold text-white">
                 Hapus
               </button>
             </div>

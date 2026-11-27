@@ -10,6 +10,7 @@ import { FieldVisitsView } from './components/FieldVisitsView';
 import { AccountView } from './components/AccountView';
 import { MasterPromptView } from './components/MasterPromptView';
 import { RegionManagerModal } from './components/RegionManagerModal';
+import { BranchManagerModal } from './components/BranchManagerModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { AuthGate } from './components/AuthGate';
 import { apiFetch, getAuthToken, getSessionExpiresAt, setAuthToken, setUnauthorizedHandler } from './lib/api';
@@ -22,6 +23,7 @@ import {
   UserProfile,
   AppNotification,
   RegionItem,
+  BranchItem,
 } from './types';
 
 function playNotificationChime() {
@@ -82,6 +84,7 @@ export default function App() {
   // Real SQLite Data State
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [regions, setRegions] = useState<RegionItem[]>([]);
+  const [branches, setBranches] = useState<BranchItem[]>([]);
   const [devices, setDevices] = useState<InfrastructureDevice[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [visits, setVisits] = useState<FieldVisitReport[]>([]);
@@ -97,6 +100,7 @@ export default function App() {
   const [isCreateTicketModalOpen, setIsCreateTicketModalOpen] = useState(false);
   const [isCreateVisitModalOpen, setIsCreateVisitModalOpen] = useState(false);
   const [isRegionModalOpen, setIsRegionModalOpen] = useState(false);
+  const [isBranchModalOpen, setIsBranchModalOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('nusantara_theme', darkMode ? 'dark' : 'light');
@@ -108,9 +112,10 @@ export default function App() {
   }, [darkMode]);
 
   const loadWorkspaceData = useCallback(async () => {
-    const [uRes, rRes, dRes, tRes, vRes, nRes] = await Promise.all([
+    const [uRes, rRes, bRes, dRes, tRes, vRes, nRes] = await Promise.all([
       apiFetch<{ users: UserProfile[] }>('/api/users'),
       apiFetch<{ regions: RegionItem[] }>('/api/regions'),
+      apiFetch<{ branches: BranchItem[] }>('/api/branches'),
       apiFetch<{ devices: InfrastructureDevice[] }>('/api/devices'),
       apiFetch<{ tickets: Ticket[] }>('/api/tickets'),
       apiFetch<{ visits: FieldVisitReport[] }>('/api/visits'),
@@ -118,6 +123,7 @@ export default function App() {
     ]);
     setUsers(uRes.users);
     setRegions(rRes.regions);
+    setBranches(bRes.branches);
     setDevices(dRes.devices);
     setTickets(tRes.tickets);
     setVisits(vRes.visits);
@@ -205,10 +211,11 @@ export default function App() {
 
     const resyncAfterReconnect = async () => {
       try {
-        const [nRes, tRes, rRes, dRes, vRes] = await Promise.all([
+        const [nRes, tRes, rRes, bRes, dRes, vRes] = await Promise.all([
           apiFetch<{ notifications: AppNotification[] }>('/api/notifications'),
           apiFetch<{ tickets: Ticket[] }>('/api/tickets'),
           apiFetch<{ regions: RegionItem[] }>('/api/regions'),
+          apiFetch<{ branches: BranchItem[] }>('/api/branches'),
           apiFetch<{ devices: InfrastructureDevice[] }>('/api/devices'),
           apiFetch<{ visits: FieldVisitReport[] }>('/api/visits'),
         ]);
@@ -216,6 +223,7 @@ export default function App() {
           setNotifications(nRes.notifications);
           setTickets(tRes.tickets);
           setRegions(rRes.regions);
+          setBranches(bRes.branches);
           setDevices(dRes.devices);
           setVisits(vRes.visits);
         }
@@ -326,6 +334,19 @@ export default function App() {
           } else if (parsed.event === 'visit:deleted' && typeof parsed.data?.id === 'string') {
             const deletedId = parsed.data.id;
             setVisits((prev) => prev.filter((v) => v.id !== deletedId));
+          } else if (parsed.event === 'branch:created' && parsed.data?.branch) {
+            const incoming = parsed.data.branch as BranchItem;
+            setBranches((prev) =>
+              prev.some((b) => b.id === incoming.id) ? prev : [...prev, incoming].sort((a, b) => a.name.localeCompare(b.name))
+            );
+          } else if (parsed.event === 'branch:updated' && parsed.data?.branch) {
+            const incoming = parsed.data.branch as BranchItem;
+            setBranches((prev) =>
+              prev.map((b) => (b.id === incoming.id ? incoming : b)).sort((a, b) => a.name.localeCompare(b.name))
+            );
+          } else if (parsed.event === 'branch:deleted' && typeof parsed.data?.id === 'string') {
+            const deletedId = parsed.data.id;
+            setBranches((prev) => prev.filter((b) => b.id !== deletedId));
           }
         } catch {
           // Ignore malformed WS payloads
@@ -619,12 +640,14 @@ export default function App() {
               currentUser={currentUser}
               devices={devices}
               regions={regions}
+              branches={branches}
               globalSearch={searchTerm}
               onCreated={(dev) => setDevices((prev) => (prev.some((d) => d.id === dev.id) ? prev : [dev, ...prev]))}
               onUpdated={(dev) => setDevices((prev) => prev.map((d) => (d.id === dev.id ? dev : d)))}
               onDevicesSynced={(nextList) => setDevices(nextList)}
               onDeleted={(id) => setDevices((prev) => prev.filter((d) => d.id !== id))}
               onOpenRegionManager={() => setIsRegionModalOpen(true)}
+              onOpenBranchManager={() => setIsBranchModalOpen(true)}
               onCreateTicketFromDevice={handleCreateTicketFromDevice}
               isCreateModalOpen={isCreateDeviceModalOpen}
               setIsCreateModalOpen={setIsCreateDeviceModalOpen}
@@ -719,6 +742,17 @@ export default function App() {
           }
         }}
         onDeleted={(id) => setRegions((prev) => prev.filter((r) => r.id !== id))}
+      />
+
+      <BranchManagerModal
+        isOpen={isBranchModalOpen}
+        onClose={() => setIsBranchModalOpen(false)}
+        regions={regions}
+        branches={branches}
+        currentUser={currentUser}
+        onCreated={(b) => setBranches((prev) => (prev.some((item) => item.id === b.id) ? prev : [...prev, b].sort((x, y) => x.name.localeCompare(y.name))))}
+        onUpdated={(b) => setBranches((prev) => prev.map((item) => (item.id === b.id ? b : item)).sort((x, y) => x.name.localeCompare(y.name)))}
+        onDeleted={(id) => setBranches((prev) => prev.filter((item) => item.id !== id))}
       />
 
       <MobileBottomNav

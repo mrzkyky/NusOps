@@ -162,6 +162,40 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS branches (
+    id TEXT PRIMARY KEY,
+    region_name TEXT NOT NULL,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    pic_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS maintenance_schedules (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL,
+    region TEXT NOT NULL,
+    branch_unit TEXT NOT NULL,
+    frequency_days INTEGER NOT NULL DEFAULT 30,
+    next_due_date TEXT NOT NULL,
+    assigned_to_id TEXT NOT NULL DEFAULT '',
+    assigned_to_name TEXT NOT NULL DEFAULT 'Belum Ditugaskan',
+    status TEXT NOT NULL DEFAULT 'Active',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    user_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    details TEXT NOT NULL,
+    ip_address TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -1541,7 +1575,255 @@ app.delete('/api/regions/:id', requireAuth, (req: AuthRequest, res: Response) =>
     return;
   }
   broadcastWs('region:deleted', { id: req.params.id });
+  recordAuditLog(req, 'DELETE_REGION', `Menghapus wilayah ID ${req.params.id}`);
   res.json({ ok: true });
+});
+
+function recordAuditLog(req: Request, action: string, details: string) {
+  try {
+    const user = getAuthenticatedUser(req);
+    const userId = user ? user.id : 'system';
+    const userName = user ? user.name : 'System Scheduler';
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+    db.prepare(`
+      INSERT INTO audit_logs (id, user_id, user_name, action, details, ip_address, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      `aud-${crypto.randomUUID()}`,
+      userId,
+      userName,
+      action,
+      details,
+      String(ip),
+      new Date().toISOString()
+    );
+  } catch {
+    // Ignore audit log error
+  }
+}
+
+// --- BRANCHES (CABANG / UNIT) ---
+function mapBranch(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    regionName: String(row.region_name),
+    name: String(row.name),
+    code: String(row.code || ''),
+    address: String(row.address || ''),
+    picName: String(row.pic_name || ''),
+    createdAt: String(row.created_at),
+  };
+}
+
+app.get('/api/branches', requireAuth, (_req: AuthRequest, res: Response) => {
+  const rows = db.prepare('SELECT * FROM branches ORDER BY name ASC').all() as Record<string, unknown>[];
+  res.json({ branches: rows.map(mapBranch) });
+});
+
+app.post('/api/branches', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!isTicketManagerRole(req.user!.role)) {
+    res.status(403).json({ error: 'Hanya Super Admin, Manager, atau SPV yang dapat menambah cabang.' });
+    return;
+  }
+  const { regionName, name, code, address, picName } = req.body as Record<string, string>;
+  const cleanName = (name || '').trim();
+  if (!cleanName || !regionName) {
+    res.status(400).json({ error: 'Nama cabang dan wilayah wajib diisi.' });
+    return;
+  }
+
+  const id = `brn-${crypto.randomUUID()}`;
+  const cleanCode = (code || cleanName.replace(/[^A-Za-z]/g, '').slice(0, 3)).toUpperCase();
+  const now = new Date().toISOString();
+  db.prepare(
+    'INSERT INTO branches (id, region_name, name, code, address, pic_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, regionName, cleanName, cleanCode, (address || '').trim(), (picName || '').trim(), now);
+
+  const created = db.prepare('SELECT * FROM branches WHERE id = ?').get(id) as Record<string, unknown>;
+  const mapped = mapBranch(created);
+  recordAuditLog(req, 'CREATE_BRANCH', `Menambahkan cabang ${mapped.name} di wilayah ${mapped.regionName}`);
+  broadcastWs('branch:created', { branch: mapped });
+  res.status(201).json({ branch: mapped });
+});
+
+app.patch('/api/branches/:id', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!isTicketManagerRole(req.user!.role)) {
+    res.status(403).json({ error: 'Hanya Super Admin, Manager, atau SPV yang dapat mengubah cabang.' });
+    return;
+  }
+  const existing = db.prepare('SELECT * FROM branches WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
+  if (!existing) {
+    res.status(404).json({ error: 'Cabang tidak ditemukan.' });
+    return;
+  }
+
+  const { regionName, name, code, address, picName } = req.body as Record<string, string>;
+  db.prepare('UPDATE branches SET region_name = ?, name = ?, code = ?, address = ?, pic_name = ? WHERE id = ?').run(
+    regionName !== undefined ? regionName : existing.region_name,
+    name !== undefined ? name.trim() : existing.name,
+    code !== undefined ? code.trim().toUpperCase() : existing.code,
+    address !== undefined ? address.trim() : existing.address,
+    picName !== undefined ? picName.trim() : existing.pic_name,
+    req.params.id
+  );
+
+  const updated = db.prepare('SELECT * FROM branches WHERE id = ?').get(req.params.id) as Record<string, unknown>;
+  const mapped = mapBranch(updated);
+  recordAuditLog(req, 'UPDATE_BRANCH', `Memperbarui cabang ${mapped.name}`);
+  broadcastWs('branch:updated', { branch: mapped });
+  res.json({ branch: mapped });
+});
+
+app.delete('/api/branches/:id', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!isTicketManagerRole(req.user!.role)) {
+    res.status(403).json({ error: 'Hanya Super Admin, Manager, atau SPV yang dapat menghapus cabang.' });
+    return;
+  }
+  const info = db.prepare('DELETE FROM branches WHERE id = ?').run(req.params.id);
+  if (info.changes === 0) {
+    res.status(404).json({ error: 'Cabang tidak ditemukan.' });
+    return;
+  }
+  recordAuditLog(req, 'DELETE_BRANCH', `Menghapus cabang ID ${req.params.id}`);
+  broadcastWs('branch:deleted', { id: req.params.id });
+  res.json({ ok: true });
+});
+
+// --- PREVENTIVE MAINTENANCE SCHEDULES ---
+function mapSchedule(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    category: String(row.category),
+    region: String(row.region),
+    branchUnit: String(row.branch_unit),
+    frequencyDays: Number(row.frequency_days),
+    nextDueDate: String(row.next_due_date),
+    assignedToId: String(row.assigned_to_id || ''),
+    assignedToName: String(row.assigned_to_name || 'Belum Ditugaskan'),
+    status: String(row.status),
+    createdAt: String(row.created_at),
+  };
+}
+
+app.get('/api/schedules', requireAuth, (_req: AuthRequest, res: Response) => {
+  const rows = db.prepare('SELECT * FROM maintenance_schedules ORDER BY next_due_date ASC').all() as Record<string, unknown>[];
+  res.json({ schedules: rows.map(mapSchedule) });
+});
+
+app.post('/api/schedules', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!isTicketManagerRole(req.user!.role)) {
+    res.status(403).json({ error: 'Hanya Super Admin, Manager, atau SPV yang dapat membuat jadwal maintenance.' });
+    return;
+  }
+  const { title, category, region, branchUnit, frequencyDays, nextDueDate, assignedToId, assignedToName } = req.body;
+  if (!title?.trim() || !category || !region || !branchUnit?.trim() || !nextDueDate) {
+    res.status(400).json({ error: 'Judul, kategori, wilayah, unit cabang, dan tanggal jatuh tempo wajib diisi.' });
+    return;
+  }
+
+  const id = `sch-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO maintenance_schedules (id, title, category, region, branch_unit, frequency_days, next_due_date, assigned_to_id, assigned_to_name, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', ?)
+  `).run(
+    id,
+    title.trim(),
+    category,
+    region,
+    branchUnit.trim(),
+    Number(frequencyDays) || 30,
+    nextDueDate,
+    assignedToId || '',
+    assignedToName || 'Belum Ditugaskan',
+    now
+  );
+
+  const created = db.prepare('SELECT * FROM maintenance_schedules WHERE id = ?').get(id) as Record<string, unknown>;
+  const mapped = mapSchedule(created);
+  recordAuditLog(req, 'CREATE_SCHEDULE', `Membuat jadwal maintenance "${mapped.title}" untuk ${mapped.branchUnit}`);
+  broadcastWs('schedule:created', { schedule: mapped });
+  res.status(201).json({ schedule: mapped });
+});
+
+app.post('/api/schedules/:id/trigger', requireAuth, (req: AuthRequest, res: Response) => {
+  const existing = db.prepare('SELECT * FROM maintenance_schedules WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined;
+  if (!existing) {
+    res.status(404).json({ error: 'Jadwal maintenance tidak ditemukan.' });
+    return;
+  }
+
+  const freq = Number(existing.frequency_days) || 30;
+  const currentDue = new Date(String(existing.next_due_date));
+  currentDue.setDate(currentDue.getDate() + freq);
+  const nextStr = currentDue.toISOString().slice(0, 10);
+
+  db.prepare('UPDATE maintenance_schedules SET next_due_date = ?, status = ? WHERE id = ?').run(
+    nextStr,
+    'Completed',
+    req.params.id
+  );
+
+  const updated = db.prepare('SELECT * FROM maintenance_schedules WHERE id = ?').get(req.params.id) as Record<string, unknown>;
+  const mapped = mapSchedule(updated);
+  recordAuditLog(req, 'TRIGGER_SCHEDULE', `Menjalankan trigger maintenance "${mapped.title}"`);
+  broadcastWs('schedule:updated', { schedule: mapped });
+  res.json({ schedule: mapped });
+});
+
+app.delete('/api/schedules/:id', requireAuth, (req: AuthRequest, res: Response) => {
+  if (!isTicketManagerRole(req.user!.role)) {
+    res.status(403).json({ error: 'Hanya Super Admin, Manager, atau SPV yang dapat menghapus jadwal maintenance.' });
+    return;
+  }
+  db.prepare('DELETE FROM maintenance_schedules WHERE id = ?').run(req.params.id);
+  recordAuditLog(req, 'DELETE_SCHEDULE', `Menghapus jadwal maintenance ID ${req.params.id}`);
+  broadcastWs('schedule:deleted', { id: req.params.id });
+  res.json({ ok: true });
+});
+
+// --- AUDIT LOGS ---
+app.get('/api/audit-logs', requireAuth, (req: AuthRequest, res: Response) => {
+  if (req.user!.role !== 'Super Admin') {
+    res.status(403).json({ error: 'Hanya Super Admin yang dapat mengakses audit log.' });
+    return;
+  }
+  const rows = db.prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100').all() as Record<string, unknown>[];
+  res.json({
+    auditLogs: rows.map((r) => ({
+      id: String(r.id),
+      userId: String(r.user_id),
+      userName: String(r.user_name),
+      action: String(r.action),
+      details: String(r.details),
+      ipAddress: String(r.ip_address || ''),
+      createdAt: String(r.created_at),
+    })),
+  });
+});
+
+// --- SMTP TEST ROUTE ---
+app.post('/api/system/test-smtp', requireAuth, async (req: AuthRequest, res: Response) => {
+  if (req.user!.role !== 'Super Admin') {
+    res.status(403).json({ error: 'Hanya Super Admin yang dapat melakukan tes SMTP.' });
+    return;
+  }
+  const { email } = req.body as { email?: string };
+  const targetEmail = (email?.trim() || req.user!.email).toLowerCase();
+  if (!targetEmail) {
+    res.status(400).json({ error: 'Email tujuan tes wajib diisi.' });
+    return;
+  }
+
+  const result = await sendOtpEmail(targetEmail, req.user!.name, '123456', 'reset');
+  recordAuditLog(req, 'TEST_SMTP', `Melakukan tes pengiriman email SMTP ke ${targetEmail} (${result.sent ? 'Berhasil' : 'Gagal'})`);
+  res.json({
+    sent: result.sent,
+    message: result.sent
+      ? `Email tes SMTP berhasil dikirim ke ${targetEmail}.`
+      : `SMTP belum dikonfigurasi dengan benar pada server (.env): ${result.error || 'Connection failed'}`,
+  });
 });
 
 // --- SYSTEM HOST METRICS ---
