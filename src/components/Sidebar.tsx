@@ -43,8 +43,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'ticketing', label: 'Tiketing Insiden', icon: TicketCheck },
     { id: 'visits', label: 'Kunjungan & Daily Report', icon: ClipboardCheck },
     { id: 'maintenance', label: 'Maintenance Rutin', icon: Clock },
-    { id: 'accounts', label: 'Akun & Tim', icon: Users },
-    { id: 'audit', label: 'Audit Log & Sistem', icon: ShieldCheck },
+    ...(currentUser.role === 'Super Admin' || currentUser.role === 'Manager' || currentUser.role === 'SPV' || currentUser.role === 'Regional Manager'
+      ? [{ id: 'accounts', label: 'Akun & Tim', icon: Users }]
+      : []),
+    ...(currentUser.role === 'Super Admin'
+      ? [{ id: 'audit', label: 'Audit Log & Sistem', icon: ShieldCheck }]
+      : []),
   ];
 
   const handleSelect = (id: string) => {

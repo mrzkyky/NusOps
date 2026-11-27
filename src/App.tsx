@@ -106,6 +106,22 @@ export default function App() {
   const [isBranchModalOpen, setIsBranchModalOpen] = useState(false);
 
   useEffect(() => {
+    if (!currentUser) return;
+    if (currentTab === 'audit' && currentUser.role !== 'Super Admin') {
+      setCurrentTab('dashboard');
+    }
+    if (
+      currentTab === 'accounts' &&
+      currentUser.role !== 'Super Admin' &&
+      currentUser.role !== 'Manager' &&
+      currentUser.role !== 'SPV' &&
+      currentUser.role !== 'Regional Manager'
+    ) {
+      setCurrentTab('dashboard');
+    }
+  }, [currentTab, currentUser]);
+
+  useEffect(() => {
     localStorage.setItem('nusantara_theme', darkMode ? 'dark' : 'light');
     if (darkMode) {
       document.documentElement.classList.add('dark');
